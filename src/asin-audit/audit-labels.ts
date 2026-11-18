@@ -1,0 +1,45 @@
+import { uiLanguage } from "../common/i18n/request-language"
+
+const ENGLISH_LABELS: Record<string, string> = {
+  搜索意图与语义匹配: "Search intent and semantic relevance",
+  标题身份与关键规格: "Title identity and key specifications",
+  核心意图自然表达: "Natural expression of core intent",
+  "合格配置/场景词内容覆盖": "Qualified configuration and use-case coverage",
+  场景与受众清晰度: "Use-case and audience clarity",
+  任务与人群清晰度: "Task and audience clarity",
+  产品身份与能力清晰度: "Product identity and capability clarity",
+  用途相容性: "Use-case compatibility",
+  关键问题可回答性: "Answerability of key questions",
+  购买问题的答案可定位: "Findable answers to purchase questions",
+  使用条件与边界: "Usage conditions and limitations",
+  文字与排版可读性: "Text and layout readability",
+  差异化与价值表达: "Differentiation and value proposition",
+  对标后的购买价值: "Purchase value against competitors",
+  量化与比较卖点依据: "Evidence for quantified and comparative claims",
+  可比竞品VOC回应: "Response to comparable competitor feedback",
+  内容资产有效性: "Content effectiveness",
+  图片信息与可读性: "Image information and readability",
+  "公开A+内容有效性": "Public A+ content effectiveness",
+  视频演示价值: "Video demonstration value",
+  产品事实与属性一致性: "Product fact and attribute consistency",
+  六组核心事实一致性: "Consistency of six core fact groups",
+  "后台Search Terms有效性": "Backend search-term effectiveness",
+  五组辅助属性: "Five supporting attribute groups",
+  自然可见度与流量承接: "Organic visibility and traffic coverage",
+  当日核心词首页观测率: "Daily core-keyword first-page visibility",
+  合格机会词曝光承接: "Qualified opportunity-keyword coverage",
+  口碑与购买风险: "Reputation and purchase risk",
+  评分可信度: "Rating credibility",
+  近期购买风险: "Recent purchase risk",
+  排名趋势与稳定性: "Ranking trend and stability",
+  流量来源韧性: "Traffic-source resilience",
+  核心: "Core",
+  品类: "Category",
+  功能属性: "Features",
+  场景: "Use case",
+  人群: "Audience",
+}
+
+export function auditLabel(label: string): string {
+  return uiLanguage() === "en-US" ? (ENGLISH_LABELS[label] ?? label) : label
+}
