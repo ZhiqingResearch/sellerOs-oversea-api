@@ -67,7 +67,7 @@ jobs:
 
       # dev 环境：develop 分支推送自动部署到 sourcing-api-dev
       - name: Notify Jenkins dev (develop 环境)
-        if: github.ref == 'refs/heads/develop'
+        if: github.ref == 'refs/heads/dev'
         env:
           CRUMB: ${{ steps.get-crumb.outputs.crumb }}
         run: |
