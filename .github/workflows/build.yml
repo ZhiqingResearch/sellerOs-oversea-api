@@ -1,32 +1,15 @@
 name: builder
 
 on:
-  workflow_dispatch:
-    inputs:
-      environment:
-        description: "部署环境（dev / dev1 / dev2 / dev3 / uat 可选任意分支或 tag；prod 必须选 v* 开头的 tag 运行；留 none 则按旧规则：develop→dev、develop1→dev1、develop2→dev2）"
-        type: choice
-        default: none
-        options:
-          - none
-          - dev
-          - dev1
-          - dev2
-          - dev3
-          - uat
-          - prod
+  push:
+    branches:
+      - develop
+      - release
 
 jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
-      # 生产部署的前置校验：必须在 Run workflow 的下拉框里选择 v* 开头的 tag（而不是分支）
-      - name: Validate prod deploy ref
-        if: inputs.environment == 'prod' && !startsWith(github.ref, 'refs/tags/v')
-        run: |
-          echo "::error::生产部署必须选择 v* 开头的 tag 运行（当前 ref：${{ github.ref }}）。请先打 tag（如 v1.1.0）再触发。"
-          exit 1
-
       - name: Check out the repo
         uses: actions/checkout@v4
 
@@ -49,8 +32,7 @@ jobs:
         with:
           images: ${{ secrets.ALIYUN_REGISTRY }}/dinglan-backend/${{ github.event.repository.name }}
           tags: |
-            type=ref,event=branch
-            type=ref,event=tag
+            type=sha,prefix={{branch}}-
           # tag 事件默认会追加 :latest（latest=auto），导致 outputs.tags 变多行，关掉
           flavor: |
             latest=false
@@ -79,13 +61,12 @@ jobs:
             "${{ secrets.JENKINS_URL }}/crumbIssuer/api/json" | jq -r .crumb)
           echo "crumb=$CRUMB" >> "$GITHUB_OUTPUT"
 
-      # dev 环境：选了 environment=dev 时部署当前所选分支；未选（none）时保持旧行为——仅 develop 分支自动部署
+      # dev 环境：develop 分支推送自动部署到 sourcing-api-dev
       - name: Notify Jenkins dev (develop 环境)
-        if: inputs.environment == 'dev' || (inputs.environment == 'none' && github.ref == 'refs/heads/develop')
+        if: github.ref == 'refs/heads/develop'
         env:
           CRUMB: ${{ steps.get-crumb.outputs.crumb }}
         run: |
-          # 取 metadata 输出的第一个镜像地址（已做小写化；flavor latest=false 保证只有这一个）
           IMAGE_TAG="${{ fromJSON(steps.meta.outputs.json).tags[0] }}"
           curl -X POST \
             -H "Jenkins-Crumb: $CRUMB" \
@@ -94,24 +75,9 @@ jobs:
             --data token=${{ secrets.JENKINS_BUILD_TOKEN }} \
             --data IMAGE_TAG="${IMAGE_TAG}"
 
-      # dev1 环境：选了 environment=dev1 时部署当前所选分支；未选（none）时保持旧行为——仅 develop1 分支自动部署
-      - name: Notify Jenkins dev1 (develop1 环境)
-        if: inputs.environment == 'dev1' || (inputs.environment == 'none' && github.ref == 'refs/heads/develop1')
-        env:
-          CRUMB: ${{ steps.get-crumb.outputs.crumb }}
-        run: |
-          # 取 metadata 输出的第一个镜像地址（已做小写化；flavor latest=false 保证只有这一个）
-          IMAGE_TAG="${{ fromJSON(steps.meta.outputs.json).tags[0] }}"
-          curl -X POST \
-            -H "Jenkins-Crumb: $CRUMB" \
-            -u ${{ secrets.JENKINS_USERNAME }}:${{ secrets.JENKINS_API_TOKEN }} \
-            "${{ secrets.JENKINS_URL }}/job/sourcing-api-dev1/buildWithParameters" \
-            --data token=${{ secrets.JENKINS_BUILD_TOKEN }} \
-            --data IMAGE_TAG="${IMAGE_TAG}"
-
-      # dev3 环境：选择 environment=dev3 时部署当前所选分支或 tag
-      - name: Notify Jenkins dev3 (selleros-dev3 环境)
-        if: inputs.environment == 'dev3'
+      # release 环境：release 分支推送自动部署到 selleros-oversea-api-prod
+      - name: Notify Jenkins release (生产环境)
+        if: github.ref == 'refs/heads/release'
         env:
           CRUMB: ${{ steps.get-crumb.outputs.crumb }}
         run: |
@@ -119,52 +85,6 @@ jobs:
           curl -X POST \
             -H "Jenkins-Crumb: $CRUMB" \
             -u ${{ secrets.JENKINS_USERNAME }}:${{ secrets.JENKINS_API_TOKEN }} \
-            "${{ secrets.JENKINS_URL }}/job/sourcing-api-dev3/buildWithParameters" \
-            --data token=${{ secrets.JENKINS_BUILD_TOKEN }} \
-            --data IMAGE_TAG="${IMAGE_TAG}"
-
-      # dev2 环境：选了 environment=dev2 时部署当前所选分支；未选（none）时仅 develop2 分支自动部署
-      - name: Notify Jenkins dev2 (develop2 环境)
-        if: inputs.environment == 'dev2' || (inputs.environment == 'none' && github.ref == 'refs/heads/develop2')
-        env:
-          CRUMB: ${{ steps.get-crumb.outputs.crumb }}
-        run: |
-          # 取 metadata 输出的第一个镜像地址（已做小写化；flavor latest=false 保证只有这一个）
-          IMAGE_TAG="${{ fromJSON(steps.meta.outputs.json).tags[0] }}"
-          curl -X POST \
-            -H "Jenkins-Crumb: $CRUMB" \
-            -u ${{ secrets.JENKINS_USERNAME }}:${{ secrets.JENKINS_API_TOKEN }} \
-            "${{ secrets.JENKINS_URL }}/job/sourcing-api-dev2/buildWithParameters" \
-            --data token=${{ secrets.JENKINS_BUILD_TOKEN }} \
-            --data IMAGE_TAG="${IMAGE_TAG}"
-
-      # uat 环境：选了 environment=uat 时部署当前所选分支或 tag
-      - name: Notify Jenkins uat (UAT 环境)
-        if: inputs.environment == 'uat'
-        env:
-          CRUMB: ${{ steps.get-crumb.outputs.crumb }}
-        run: |
-          # 取 metadata 输出的第一个镜像地址（已做小写化；flavor latest=false 保证只有这一个）
-          IMAGE_TAG="${{ fromJSON(steps.meta.outputs.json).tags[0] }}"
-          curl -X POST \
-            -H "Jenkins-Crumb: $CRUMB" \
-            -u ${{ secrets.JENKINS_USERNAME }}:${{ secrets.JENKINS_API_TOKEN }} \
-            "${{ secrets.JENKINS_URL }}/job/sourcing-api-uat/buildWithParameters" \
-            --data token=${{ secrets.JENKINS_BUILD_TOKEN }} \
-            --data IMAGE_TAG="${IMAGE_TAG}"
-
-      # 生产环境：必须显式选择 environment=prod，且 ref 为 v* tag（由首步校验保证）。
-      # 镜像 tag 即版本号（如 :v1.1.0），不可变；回滚 = 选旧 tag 重跑一次本 workflow。
-      - name: Notify Jenkins prod (生产环境)
-        if: inputs.environment == 'prod'
-        env:
-          CRUMB: ${{ steps.get-crumb.outputs.crumb }}
-        run: |
-          # 取 metadata 输出的第一个镜像地址（已做小写化；flavor latest=false 保证只有这一个）
-          IMAGE_TAG="${{ fromJSON(steps.meta.outputs.json).tags[0] }}"
-          curl -X POST \
-            -H "Jenkins-Crumb: $CRUMB" \
-            -u ${{ secrets.JENKINS_USERNAME }}:${{ secrets.JENKINS_API_TOKEN }} \
-            "${{ secrets.JENKINS_URL }}/job/sourcing-api/buildWithParameters" \
+            "${{ secrets.JENKINS_URL }}/job/selleros-oversea-api-prod/buildWithParameters" \
             --data token=${{ secrets.JENKINS_BUILD_TOKEN }} \
             --data IMAGE_TAG="${IMAGE_TAG}"
