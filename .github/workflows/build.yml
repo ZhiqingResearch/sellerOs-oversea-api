@@ -33,7 +33,7 @@ jobs:
           images: ${{ secrets.ALIYUN_REGISTRY }}/dinglan-backend/${{ github.event.repository.name }}
           tags: |
             type=sha,prefix={{branch}}-
-          # tag 事件默认会追加 :latest（latest=auto），导致 outputs.tags 变多行，关掉
+          # tag 事件默认会追加 :latest（latest=auto），导致 outputs.tags 变多行
           flavor: |
             latest=false
 
