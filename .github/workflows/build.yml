@@ -3,7 +3,7 @@ name: builder
 on:
   push:
     branches:
-      - develop
+      - dev
       - release
 
 jobs:
