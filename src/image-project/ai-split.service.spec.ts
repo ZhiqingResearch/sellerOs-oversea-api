@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 import { BadRequestException, NotFoundException } from "@nestjs/common"
 import { createHash } from "crypto"
+import { withUiLanguage } from "../common/i18n/request-language"
 import { AI_SPLIT_COMPETITOR_SCHEMA_VERSION } from "./ai-split-task.runner"
 import { AiSplitService } from "./ai-split.service"
 import { AiSplitPromptSnapshot } from "./ai-split.types"
@@ -283,7 +284,7 @@ describe("AiSplitService", () => {
       { reconcileImageTaskOnRead: jest.fn().mockResolvedValue(false) } as never
     )
 
-    const result = await service.createTasksFromTemplate(
+    const result = await withUiLanguage("en-US", () => service.createTasksFromTemplate(
       5,
       70,
       {
@@ -301,7 +302,7 @@ describe("AiSplitService", () => {
         ],
       },
       7
-    )
+    ))
 
     expect(validator.validateImageModel).toHaveBeenCalledWith({
       model: "ZQ-Image-3", quantity: 1,
@@ -313,6 +314,7 @@ describe("AiSplitService", () => {
         data: expect.objectContaining({
           aiSplitStage: "PRODUCT_PLANNING",
           presetCategory: "AI_SPLIT_TEMPLATE",
+          prompt: "Preparing AI image splitting prompt from template",
           promptConfig: expect.objectContaining({
             reference: { sourceType: "TEMPLATE", sourceId: 501 },
             competitorTemplate,

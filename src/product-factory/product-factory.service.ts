@@ -1,9 +1,15 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common"
 import { Prisma, ProductFactoryRecord } from "@prisma/client"
+import { uiText } from "../common/i18n/request-language"
 import { PrismaService } from "../prisma/prisma.service"
 import { CreateRecordDto } from "./dto/create-record.dto"
 import { QueryRecordDto } from "./dto/query-record.dto"
 import { UpdateRecordDto } from "./dto/update-record.dto"
+import {
+  COMPETITOR_RECORD_PREFIX,
+  OWN_PRODUCT_RECORD_PREFIX,
+  UNTITLED_OWN_PRODUCT,
+} from "./product-factory-record-name"
 
 /** 竞品来源完整 6 步（末步「新品推广 SOP」与 /promotion-plan 菜单页同能力并存）。 */
 const TOTAL_STEPS_COMPETITOR = 6
@@ -45,7 +51,7 @@ export class ProductFactoryService {
     if (isCompetitor) {
       const first = urls[0]
       const asin = this.extractAsin(first)
-      productName = `竞品复刻 · ${asin ?? first.slice(0, 40)}`
+      productName = `${uiText(...COMPETITOR_RECORD_PREFIX)}${asin ?? first.slice(0, 40)}`
     } else {
       // 自有商品：品名 ← 我方名称 → 首份资料文件名 → 采购平台 → 未命名
       const our = dto.sourceInput.ourProduct as
@@ -55,8 +61,8 @@ export class ProductFactoryService {
         our?.name?.trim() ||
         our?.documents?.[0]?.name?.trim() ||
         our?.purchaseInfo?.platform?.trim() ||
-        "未命名"
-      productName = `自有商品 · ${ownName.slice(0, 40)}`
+        uiText(...UNTITLED_OWN_PRODUCT)
+      productName = `${uiText(...OWN_PRODUCT_RECORD_PREFIX)}${ownName.slice(0, 40)}`
     }
 
     const record = await this.prisma.productFactoryRecord.create({

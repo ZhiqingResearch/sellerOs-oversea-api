@@ -1,4 +1,5 @@
 import { BadRequestException, PayloadTooLargeException } from "@nestjs/common"
+import type { UiLanguage } from "../common/i18n/request-language"
 import { hashJson, isJsonObject } from "../common/utils/canonical-json"
 import {
   COMPETITOR_ANALYSIS_ASIN_PATTERN,
@@ -77,7 +78,7 @@ export function validateAndNormalizeCompetitorAnalysisRecord(
   const products = normalizeProducts(dto.products)
   const reportData = jsonObject(dto.reportData, "reportData")
   const competitorCount = input.competitorAsins.length
-  const title = buildTitle(input, competitorCount)
+  const title = formatCompetitorRecordTitle(input, competitorCount)
 
   const snapshot = {
     schemaVersion: dto.schemaVersion,
@@ -228,10 +229,17 @@ function normalizeProducts(
   return normalized.sort((a, b) => a.sortOrder - b.sortOrder)
 }
 
-function buildTitle(input: NormalizedCompetitorAnalysisInput, competitorCount: number) {
-  const title = input.ownAsin
-    ? `我方 ${input.ownAsin} vs ${competitorCount} 个竞品`
-    : `${input.keyword || "竞品分析"} · ${competitorCount} 个竞品`
+export function formatCompetitorRecordTitle(
+  input: Pick<NormalizedCompetitorAnalysisInput, "ownAsin" | "keyword">,
+  competitorCount: number,
+  language: UiLanguage = "zh-CN"
+) {
+  const count = language === "en-US"
+    ? `${competitorCount} ${competitorCount === 1 ? "competitor" : "competitors"}`
+    : `${competitorCount} 个竞品`
+  const own = language === "en-US" ? "Our ASIN" : "我方"
+  const fallback = language === "en-US" ? "Competitor Analysis" : "竞品分析"
+  const title = input.ownAsin ? `${own} ${input.ownAsin} vs ${count}` : `${input.keyword || fallback} · ${count}`
   return title.length <= 500 ? title : `${title.slice(0, 499)}…`
 }
 

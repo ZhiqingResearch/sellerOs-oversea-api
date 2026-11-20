@@ -1,5 +1,10 @@
 import type { HistoryType } from "@prisma/client"
+import { uiLanguage, uiText } from "../common/i18n/request-language"
+import { isJsonObject } from "../common/utils/canonical-json"
+import { formatCompetitorRecordTitle } from "../competitor-analysis/competitor-analysis-record.validator"
+import { englishListingHistoryTitle } from "../listing/listing-history-title"
 import type { PrismaService } from "../prisma/prisma.service"
+import { englishProductFactoryRecordName } from "../product-factory/product-factory-record-name"
 
 /** 工作台聚合的功能 key；与前端功能分布卡片一一对应 */
 export enum WorkbenchFeatureKey {
@@ -78,7 +83,7 @@ function truncateTitle(text: string | null | undefined, max = 60): string | null
 /** 按 key/label 把各业务的行查询归一成统一条目 */
 function defineQuery(
   key: WorkbenchFeatureKey,
-  label: string,
+  label: [zh: string, en: string],
   query: {
     count: (userId: number, since: Date | null) => Promise<number>
     latestRows: (
@@ -90,12 +95,14 @@ function defineQuery(
 ): WorkbenchOutputQuery {
   return {
     key,
-    label,
+    get label() {
+      return uiText(...label)
+    },
     count: query.count,
     latest: async (userId, since, limit) =>
       (await query.latestRows(userId, since, limit)).map(row => ({
         featureKey: key,
-        featureLabel: label,
+        featureLabel: uiText(...label),
         recordId: row.id,
         title: row.title,
         occurredAt: row.createdAt,
@@ -110,7 +117,7 @@ function defineQuery(
 export function workbenchOutputQueries(prisma: PrismaService): WorkbenchOutputQuery[] {
   return [
     // ASIN 取证：取证记录表不在 SOFT_DELETE_MODELS 自动过滤集合内（见 prisma.service.ts），需显式排除软删
-    defineQuery(WorkbenchFeatureKey.ASIN_EVIDENCE, "ASIN 取证", {
+    defineQuery(WorkbenchFeatureKey.ASIN_EVIDENCE, ["ASIN 取证", "ASIN Evidence"], {
       count: (userId, since) =>
         prisma.asinEvidenceRecord.count({
           where: { userId, deletedAt: null, ...timeWhere(since) },
@@ -129,7 +136,7 @@ export function workbenchOutputQueries(prisma: PrismaService): WorkbenchOutputQu
         }))
       },
     }),
-    defineQuery(WorkbenchFeatureKey.ASIN_AUDIT, "ASIN 自审", {
+    defineQuery(WorkbenchFeatureKey.ASIN_AUDIT, ["ASIN 自审", "ASIN Audit"], {
       count: (userId, since) =>
         prisma.asinAuditRecord.count({ where: { userId, ...timeWhere(since) } }),
       latestRows: async (userId, since, limit) => {
@@ -142,21 +149,29 @@ export function workbenchOutputQueries(prisma: PrismaService): WorkbenchOutputQu
         return rows.map(row => ({ id: row.id, title: row.asin, createdAt: row.createdAt }))
       },
     }),
-    defineQuery(WorkbenchFeatureKey.COMPETITOR, "竞品分析", {
+    defineQuery(WorkbenchFeatureKey.COMPETITOR, ["竞品分析", "Competitor Analysis"], {
       count: (userId, since) =>
         prisma.competitorAnalysisRecord.count({ where: { userId, ...timeWhere(since) } }),
       latestRows: async (userId, since, limit) => {
         const rows = await prisma.competitorAnalysisRecord.findMany({
           where: { userId, ...timeWhere(since) },
-          select: { id: true, title: true, createdAt: true },
+          select: {
+            id: true, title: true, ownAsin: true, sourceKeyword: true, competitorCount: true, createdAt: true,
+          },
           orderBy: [{ createdAt: "desc" }, { id: "desc" }],
           take: limit,
         })
-        return rows.map(row => ({ id: row.id, title: row.title || null, createdAt: row.createdAt }))
+        return rows.map(row => {
+          const input = { ownAsin: row.ownAsin, keyword: row.sourceKeyword }
+          const title = uiLanguage() === "en-US" && row.title === formatCompetitorRecordTitle(input, row.competitorCount)
+            ? formatCompetitorRecordTitle(input, row.competitorCount, "en-US")
+            : row.title || null
+          return { id: row.id, title, createdAt: row.createdAt }
+        })
       },
     }),
     // 选品：仅统计已完成的五步分析，半截流程不算产出
-    defineQuery(WorkbenchFeatureKey.SELECTION, "选品", {
+    defineQuery(WorkbenchFeatureKey.SELECTION, ["选品", "Product research"], {
       count: (userId, since) =>
         prisma.selectionAnalysisRecord.count({
           where: { userId, status: "COMPLETED", ...timeWhere(since) },
@@ -164,18 +179,24 @@ export function workbenchOutputQueries(prisma: PrismaService): WorkbenchOutputQu
       latestRows: async (userId, since, limit) => {
         const rows = await prisma.selectionAnalysisRecord.findMany({
           where: { userId, status: "COMPLETED", ...timeWhere(since) },
-          select: { id: true, primaryCategoryName: true, createdAt: true },
+          select: {
+            id: true, primaryCategoryName: true, primaryCategoryNodeId: true, categories: true, createdAt: true,
+          },
           orderBy: [{ createdAt: "desc" }, { id: "desc" }],
           take: limit,
         })
-        return rows.map(row => ({
-          id: row.id,
-          title: row.primaryCategoryName || null,
-          createdAt: row.createdAt,
-        }))
+        const english = uiLanguage() === "en-US"
+        return rows.map(row => {
+          const category = english && Array.isArray(row.categories)
+            ? row.categories.find(item => isJsonObject(item) && item.nodeId === row.primaryCategoryNodeId)
+            : undefined
+          const title = isJsonObject(category) && typeof category.name === "string" && category.name.trim()
+            ? category.name : row.primaryCategoryName || null
+          return { id: row.id, title, createdAt: row.createdAt }
+        })
       },
     }),
-    defineQuery(WorkbenchFeatureKey.PRICING, "智能定价", {
+    defineQuery(WorkbenchFeatureKey.PRICING, ["智能定价", "Smart Pricing"], {
       count: (userId, since) =>
         prisma.smartPricingRecord.count({ where: { userId, ...timeWhere(since) } }),
       latestRows: async (userId, since, limit) => {
@@ -188,7 +209,7 @@ export function workbenchOutputQueries(prisma: PrismaService): WorkbenchOutputQu
         return rows.map(row => ({ id: row.id, title: row.productName, createdAt: row.createdAt }))
       },
     }),
-    defineQuery(WorkbenchFeatureKey.LAUNCH_PLAN, "新品推广", {
+    defineQuery(WorkbenchFeatureKey.LAUNCH_PLAN, ["新品推广", "Product launches"], {
       count: (userId, since) =>
         prisma.promotionPlanRecord.count({ where: { userId, ...timeWhere(since) } }),
       latestRows: async (userId, since, limit) => {
@@ -202,7 +223,7 @@ export function workbenchOutputQueries(prisma: PrismaService): WorkbenchOutputQu
       },
     }),
     // 广告优化：仅统计清洗成功的任务，排队/失败不算产出
-    defineQuery(WorkbenchFeatureKey.AD_OPT, "广告优化", {
+    defineQuery(WorkbenchFeatureKey.AD_OPT, ["广告优化", "Ad optimization"], {
       count: (userId, since) =>
         prisma.adCleaningTask.count({
           where: { userId, status: "SUCCESS", ...timeWhere(since) },
@@ -222,7 +243,7 @@ export function workbenchOutputQueries(prisma: PrismaService): WorkbenchOutputQu
       },
     }),
     // Listing 生成：走 History 操作历史，与 Listing 打分分开统计
-    defineQuery(WorkbenchFeatureKey.LISTING, "Listing 生成", {
+    defineQuery(WorkbenchFeatureKey.LISTING, ["Listing 生成", "Listing Generator"], {
       count: (userId, since) =>
         prisma.history.count({
           where: {
@@ -238,15 +259,28 @@ export function workbenchOutputQueries(prisma: PrismaService): WorkbenchOutputQu
             type: "LISTING_GENERATION" satisfies HistoryType,
             ...timeWhere(since),
           },
-          select: { id: true, title: true, createdAt: true },
+          select: {
+            id: true,
+            title: true,
+            createdAt: true,
+            listingRun: {
+              select: { steps: { orderBy: { id: "asc" }, take: 1, select: { operation: true } } },
+            },
+          },
           orderBy: [{ createdAt: "desc" }, { id: "desc" }],
           take: limit,
         })
-        return rows.map(row => ({ id: String(row.id), title: row.title, createdAt: row.createdAt }))
+        return rows.map(row => ({
+          id: String(row.id),
+          title: uiLanguage() === "en-US" && row.listingRun
+            ? englishListingHistoryTitle(row.title, row.listingRun.steps[0]?.operation)
+            : row.title,
+          createdAt: row.createdAt,
+        }))
       },
     }),
     // Listing 打分：同走 History，与生成拆成两个分布项
-    defineQuery(WorkbenchFeatureKey.LISTING_SCORE, "Listing 打分", {
+    defineQuery(WorkbenchFeatureKey.LISTING_SCORE, ["Listing 打分", "Listing Scoring"], {
       count: (userId, since) =>
         prisma.history.count({
           where: {
@@ -270,7 +304,7 @@ export function workbenchOutputQueries(prisma: PrismaService): WorkbenchOutputQu
       },
     }),
     // 上架：仅统计已提交发布的任务（publishSubmittedAt 非空），草稿不算产出
-    defineQuery(WorkbenchFeatureKey.PUBLISH, "上架", {
+    defineQuery(WorkbenchFeatureKey.PUBLISH, ["上架", "Publish"], {
       count: (userId, since) =>
         prisma.productPublishTask.count({
           where: { userId, publishSubmittedAt: { not: null }, ...timeWhere(since) },
@@ -290,19 +324,20 @@ export function workbenchOutputQueries(prisma: PrismaService): WorkbenchOutputQu
       },
     }),
     // 商品链接（AI 商品工厂）：制作记录录入竞品链接/自有商品资料才创建，创建即计入；软删由全局扩展过滤
-    defineQuery(WorkbenchFeatureKey.PRODUCT_FACTORY, "商品链接", {
+    defineQuery(WorkbenchFeatureKey.PRODUCT_FACTORY, ["商品链接", "Product listings"], {
       count: (userId, since) =>
         prisma.productFactoryRecord.count({ where: { userId, ...timeWhere(since) } }),
       latestRows: async (userId, since, limit) => {
         const rows = await prisma.productFactoryRecord.findMany({
           where: { userId, ...timeWhere(since) },
-          select: { id: true, productName: true, createdAt: true },
+          select: { id: true, productName: true, sourceType: true, createdAt: true },
           orderBy: [{ createdAt: "desc" }, { id: "desc" }],
           take: limit,
         })
         return rows.map(row => ({
           id: String(row.id),
-          title: row.productName,
+          title: uiLanguage() === "en-US"
+            ? englishProductFactoryRecordName(row.productName, row.sourceType) : row.productName,
           createdAt: row.createdAt,
         }))
       },
@@ -313,7 +348,7 @@ export function workbenchOutputQueries(prisma: PrismaService): WorkbenchOutputQu
     // 图片生成（商品图/通用/人像/批量改图）：按成功张数，两路相加——
     // GenerationTask(STANDARD) 的成功图（商品图/人像等图片项目链路）+ ImageGenJob(t2i/i2i) 的成功 item
     // （通用创作/批量改图）；AI_SPLIT 任务不在本项（AI 拆图单独成项）。软删由全局扩展过滤。
-    defineQuery(WorkbenchFeatureKey.IMAGE_GENERATION, "图片生成", {
+    defineQuery(WorkbenchFeatureKey.IMAGE_GENERATION, ["图片生成", "Image Generation"], {
       count: async (userId, since) =>
         (await prisma.generatedImage.count({
           where: {
@@ -378,7 +413,7 @@ export function workbenchOutputQueries(prisma: PrismaService): WorkbenchOutputQu
     }),
 
     // 视频生成（通用创作）：成功条数；排除动作复刻（单独成项）与带货创作（独立功能，锚 SalesWorkflow）
-    defineQuery(WorkbenchFeatureKey.VIDEO_GENERATION, "视频生成", {
+    defineQuery(WorkbenchFeatureKey.VIDEO_GENERATION, ["视频生成", "Video Generation"], {
       count: (userId, since) =>
         prisma.videoTask.count({
           where: {
@@ -418,15 +453,15 @@ export function workbenchOutputQueries(prisma: PrismaService): WorkbenchOutputQu
     // UsageLog(source=llm.generic) 按 requestId 前缀区分工具——后端扣费写
     // `toolbox:{tool}:{uuid}`、前端旧链路写 `toolbox-{功能名}-{uuid}`，两段前缀都覆盖；
     // MySQL 下 Prisma 不支持 JSON path 过滤（meta.feature 无法作为条件，见 ImageGenJob 审计快照注释）。
-    toolboxUsageQuery(prisma, WorkbenchFeatureKey.ENHANCE_PROMPT, "一键润色", [
+    toolboxUsageQuery(prisma, WorkbenchFeatureKey.ENHANCE_PROMPT, ["一键润色", "Prompt Enhancement"], [
       "toolbox:enhance:",
       "toolbox-一键润色-",
     ]),
-    toolboxUsageQuery(prisma, WorkbenchFeatureKey.IMAGE_INFERENCE, "由图推理", [
+    toolboxUsageQuery(prisma, WorkbenchFeatureKey.IMAGE_INFERENCE, ["由图推理", "Image to Prompt"], [
       "toolbox:image-inference:",
       "toolbox-由图推理-",
     ]),
-    toolboxUsageQuery(prisma, WorkbenchFeatureKey.TRANSLATE_PROMPT, "中英互译", [
+    toolboxUsageQuery(prisma, WorkbenchFeatureKey.TRANSLATE_PROMPT, ["中英互译", "Chinese–English Translation"], [
       "toolbox:translate:",
       "toolbox-中英互译-",
     ]),
@@ -434,7 +469,7 @@ export function workbenchOutputQueries(prisma: PrismaService): WorkbenchOutputQu
     // 灵感雷达：按同步次数 = 扣费流水行数（每次成功抓取的同步产生一笔
     // source=inspiration_radar.refresh 的 CONSUME 流水）。口径注脚：抓到 0 条不扣费
     // 故不计（「有效同步」）；一次扣费跨多积分桶会拆多行而轻微多计（罕见）。
-    defineQuery(WorkbenchFeatureKey.INSPIRATION_RADAR, "灵感雷达", {
+    defineQuery(WorkbenchFeatureKey.INSPIRATION_RADAR, ["灵感雷达", "Inspiration Radar"], {
       count: (userId, since) =>
         prisma.creditTransaction.count({
           where: { userId, source: "inspiration_radar.refresh", ...timeWhere(since) },
@@ -459,7 +494,7 @@ export function workbenchOutputQueries(prisma: PrismaService): WorkbenchOutputQu
     }),
 
     // AI 拆图：按成功张数（AI_SPLIT 任务的 GeneratedImage；STANDARD 已计入图片生成，不重复）
-    defineQuery(WorkbenchFeatureKey.AI_SPLIT, "AI 拆图", {
+    defineQuery(WorkbenchFeatureKey.AI_SPLIT, ["AI 拆图", "AI Image Splitting"], {
       count: (userId, since) =>
         prisma.generatedImage.count({
           where: {
@@ -501,7 +536,7 @@ export function workbenchOutputQueries(prisma: PrismaService): WorkbenchOutputQu
 
     // 视频分析：按成功计费次数（UsageLog source=video.analysis，前端旧扣费与后端新扣费同源，历史连续）；
     // 标题用 meta.videoUrl
-    defineQuery(WorkbenchFeatureKey.VIDEO_ANALYSIS, "视频分析", {
+    defineQuery(WorkbenchFeatureKey.VIDEO_ANALYSIS, ["视频分析", "Video Analysis"], {
       count: (userId, since) =>
         prisma.usageLog.count({
           where: { userId, source: "video.analysis", ...timeWhere(since) },
@@ -524,7 +559,7 @@ export function workbenchOutputQueries(prisma: PrismaService): WorkbenchOutputQu
     }),
 
     // 动作复刻：按成功条数（mode=MOTION_CONTROL，含 legacy 小写值；软删由全局扩展过滤）
-    defineQuery(WorkbenchFeatureKey.MOTION_REPLICA, "动作复刻", {
+    defineQuery(WorkbenchFeatureKey.MOTION_REPLICA, ["动作复刻", "Motion Replication"], {
       count: (userId, since) =>
         prisma.videoTask.count({
           where: {
@@ -552,7 +587,7 @@ export function workbenchOutputQueries(prisma: PrismaService): WorkbenchOutputQu
         })
         return rows.map(row => ({
           id: String(row.id),
-          title: truncateTitle(row.prompt),
+          title: row.prompt === "动作复刻" ? uiText("动作复刻", "Motion Replication") : truncateTitle(row.prompt),
           createdAt: row.createdAt,
         }))
       },
@@ -564,7 +599,7 @@ export function workbenchOutputQueries(prisma: PrismaService): WorkbenchOutputQu
 function toolboxUsageQuery(
   prisma: PrismaService,
   key: WorkbenchFeatureKey,
-  label: string,
+  label: [zh: string, en: string],
   requestIdPrefixes: string[]
 ): WorkbenchOutputQuery {
   const where = (userId: number, since: Date | null) => ({

@@ -4,7 +4,7 @@ import { Decimal } from "@prisma/client/runtime/library"
 import { createHash, randomUUID } from "crypto"
 import { extname } from "path"
 import { AiGatewayWebhookService } from "../ai-gateway/ai-gateway-webhook.service"
-import { localizeErrorMessage, uiLanguage } from "../common/i18n/request-language"
+import { localizeErrorMessage, uiLanguage, uiText } from "../common/i18n/request-language"
 import type { CreationSource } from "../common/types/creation-source"
 import { imageMetadata, modelDisplayNames } from "../common/utils/generation-metadata"
 import { POOL_IMAGE_KIND } from "../material-pool/pool-image.constants"
@@ -150,7 +150,7 @@ export class AiSplitService {
                 presetCategory: "AI_SPLIT",
                 presetOption: references[directionIndex].sourceType,
                 model: imageModel.publicId,
-                prompt: "AI 拆图提示词生成中",
+                prompt: uiText("AI 拆图提示词生成中", "Preparing AI image splitting prompt"),
                 promptConfig: snapshot as unknown as Prisma.InputJsonValue,
                 textAmount: dto.textAmount,
                 language: projectSnapshot.locale,
@@ -369,7 +369,7 @@ export class AiSplitService {
                 presetCategory: "AI_SPLIT_TEMPLATE",
                 presetOption: String(item.id),
                 model: imageModel.publicId,
-                prompt: "AI 拆图模板复用提示词生成中",
+                prompt: uiText("AI 拆图模板复用提示词生成中", "Preparing AI image splitting prompt from template"),
                 promptConfig: snapshot as unknown as Prisma.InputJsonValue,
                 textAmount: input.textAmount,
                 language: projectSnapshot.locale,

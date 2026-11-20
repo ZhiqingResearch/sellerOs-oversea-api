@@ -10,7 +10,7 @@ import {
 import { Prisma, type ListingGenerationTask } from "@prisma/client"
 import { jsonrepair } from "jsonrepair"
 import { savedUiLanguage, withOutputLanguage } from "../common/i18n/ai-language"
-import { localizeErrorMessage, uiLanguage, withUiLanguage } from "../common/i18n/request-language"
+import { localizeErrorMessage, uiLanguage, uiText, withUiLanguage } from "../common/i18n/request-language"
 import {
   AiGatewayProvider,
   type AiGatewayBillingUsage,
@@ -23,6 +23,7 @@ import {
   FinishListingGenerationDto,
 } from "./dto/listing-generation.dto"
 import { ListingAiService } from "./listing-ai.service"
+import { LISTING_DOCUMENT_TITLE } from "./listing-history-title"
 import { parseListingJsonObject } from "./listing-result-parser"
 import { ListingRunService } from "./listing-run.service"
 import { prepareListingScoreDelivery } from "./listing-score-delivery"
@@ -96,9 +97,12 @@ export class ListingGenerationService implements OnModuleInit, OnModuleDestroy {
       )
     )
       throw new BadRequestException("缺少有效的产品内容或目标市场，尚未调用模型")
+    const title = typeof params.keyword === "string" && params.keyword.trim()
+      ? params.keyword
+      : uiText(...LISTING_DOCUMENT_TITLE)
     await this.runs.create(userId, {
       runId: dto.runId,
-      title: String(params?.keyword || "产品文档").slice(0, 450),
+      title: title.slice(0, 450),
     })
     const existing = await this.prisma.listingGenerationTask.findUnique({
       where: { attemptId: dto.attemptId },

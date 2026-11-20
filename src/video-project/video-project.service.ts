@@ -32,8 +32,6 @@ import {
 // TokenLab 时代动作复刻的旧 model 标识，仅用于启动时收口历史在途任务；下个版本可删
 const MOTION_CONTROL_LEGACY_MODEL = "kling-motion"
 const MOTION_CONTROL_MAX_BATCH_TASKS = 100
-// 网关 Schema 要求 prompt 非空，用户未填补充描述时用固定兜底文案
-const MOTION_CONTROL_PROMPT_FALLBACK = "动作复刻"
 const VIDEO_TASK_TIMEOUT_MS = 30 * 60 * 1000
 
 @Injectable()
@@ -322,7 +320,8 @@ export class VideoProjectService implements OnModuleInit {
         targetImage,
         request: {
           model: model.publicId,
-          prompt: dto.prompt?.trim() || MOTION_CONTROL_PROMPT_FALLBACK,
+          // 网关要求 prompt 非空，用户可省略补充描述。
+          prompt: dto.prompt?.trim() || uiText("动作复刻", "Motion Replication"),
           mode: "motion_control",
           duration_seconds: actionVideo.durationSec,
           resolution: motionResolution,

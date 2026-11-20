@@ -7,9 +7,11 @@ import {
 } from "@nestjs/common"
 import { Prisma } from "@prisma/client"
 import { PrismaClientKnownRequestError } from "@prisma/client/runtime/library"
+import { uiLanguage } from "../common/i18n/request-language"
 import { hashJson } from "../common/utils/canonical-json"
 import { PrismaService } from "../prisma/prisma.service"
 import {
+  formatCompetitorRecordTitle,
   normalizeCompetitorAnalysisMarketplace,
   validateAndNormalizeCompetitorAnalysisRecord,
 } from "./competitor-analysis-record.validator"
@@ -50,7 +52,8 @@ export class CompetitorAnalysisRecordService {
             ownAsin: snapshot.input.ownAsin,
             competitorAsins: toJson(snapshot.input.competitorAsins),
             sourceKeyword: snapshot.input.keyword,
-            title: snapshot.title,
+            // Keep the canonical fingerprint compatible with records created in either language.
+            title: formatCompetitorRecordTitle(snapshot.input, snapshot.competitorCount, uiLanguage()),
             productCount: snapshot.productCount,
             competitorCount: snapshot.competitorCount,
             inputSnapshot: toJson(snapshot.input),

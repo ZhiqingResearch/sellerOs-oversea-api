@@ -2,6 +2,7 @@ import { BadRequestException, NotFoundException } from "@nestjs/common"
 import { Test } from "@nestjs/testing"
 import { plainToInstance } from "class-transformer"
 import { validate } from "class-validator"
+import { withUiLanguage } from "../common/i18n/request-language"
 import { PrismaService } from "../prisma/prisma.service"
 import { CreateRecordDto } from "./dto/create-record.dto"
 import { UpdateRecordDto } from "./dto/update-record.dto"
@@ -73,6 +74,20 @@ describe("ProductFactoryService", () => {
     }).compile()
 
     service = module.get(ProductFactoryService)
+  })
+
+  it("英文请求使用英文默认名称，保留用户提供的商品名", async () => {
+    const market = "amazon_us"
+    prisma.productFactoryRecord.create.mockResolvedValue(existingRecord)
+    await withUiLanguage("en-US", async () => {
+      await service.create(7, { sourceType: "competitor", sourceInput: { market, competitorUrls: ["B0C1X2Y3Z4"] } })
+      await service.create(7, { sourceType: "own_product", sourceInput: { market } })
+      await service.create(7, { sourceType: "own_product", sourceInput: { market, ourProduct: { name: "保温杯" } } })
+    })
+
+    expect(prisma.productFactoryRecord.create.mock.calls.map(([args]) => args.data.productName)).toEqual([
+      "Competitor recreation · B0C1X2Y3Z4", "Own product · Untitled", "Own product · 保温杯",
+    ])
   })
 
   describe("用户隔离", () => {

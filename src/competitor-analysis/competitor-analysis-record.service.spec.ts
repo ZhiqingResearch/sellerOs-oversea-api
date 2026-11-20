@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, NotFoundException } from "@nestjs/common"
+import { withUiLanguage } from "../common/i18n/request-language"
 import { PrismaService } from "../prisma/prisma.service"
 import { createCompetitorAnalysisDto as createDto } from "./competitor-analysis-record.fixture"
 import { CompetitorAnalysisRecordService } from "./competitor-analysis-record.service"
@@ -95,13 +96,15 @@ describe("CompetitorAnalysisRecordService", () => {
   it("returns an existing record for the same idempotent content and rejects changed content", async () => {
     prisma.competitorAnalysisRecord.findUnique.mockResolvedValue(null)
     prisma.competitorAnalysisRecord.create.mockResolvedValue(baseRecord())
-    await service.create(7, createDto())
-    const fingerprint = firstCallArg<CreateCallArgument>(prisma.competitorAnalysisRecord.create)
-      .data.createFingerprint
+    await withUiLanguage("en-US", () => service.create(7, createDto()))
+    const { createFingerprint, title } = firstCallArg<CreateCallArgument>(
+      prisma.competitorAnalysisRecord.create
+    ).data
+    expect(title).toBe("Our ASIN B0AAAA0001 vs 2 competitors")
 
     prisma.competitorAnalysisRecord.findUnique.mockResolvedValue({
       ...baseRecord(),
-      createFingerprint: fingerprint,
+      createFingerprint,
     })
     prisma.competitorAnalysisRecord.create.mockClear()
     await expect(service.create(7, createDto())).resolves.toMatchObject({

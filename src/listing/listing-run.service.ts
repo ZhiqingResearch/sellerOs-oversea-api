@@ -1,23 +1,20 @@
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from "@nestjs/common"
 import { Prisma } from "@prisma/client"
 import { randomUUID } from "crypto"
+import { uiText } from "../common/i18n/request-language"
 import { getListingHistoryScore } from "../history/listing-history-score"
 import { PrismaService } from "../prisma/prisma.service"
 import { ListingAiInvocationDto } from "./dto/listing-ai.dto"
 import { CreateListingRunDto, UpdateListingRunDto } from "./dto/listing-run.dto"
+import {
+  ENGLISH_LISTING_HISTORY_TITLE_PREFIX,
+  LISTING_DOCUMENT_TITLE,
+  LISTING_HISTORY_TITLE_PREFIX,
+  LISTING_STEP_LABELS,
+} from "./listing-history-title"
 
 const LISTING_TRANSACTION_MAX_WAIT_MS = 10_000
 const LISTING_TRANSACTION_TIMEOUT_MS = 60_000
-
-export const LISTING_STEP_LABELS: Record<string, string> = {
-  category_match: "类目匹配",
-  attribute_analysis: "属性分析",
-  long_title: "长标题生成",
-  generation: "Listing 主生成",
-  optimization: "Listing 优化",
-  qa_rewrite: "问答改写",
-  score: "Listing 评分",
-}
 
 @Injectable()
 export class ListingRunService {
@@ -26,7 +23,10 @@ export class ListingRunService {
 
   async create(userId: number, dto: CreateListingRunDto) {
     // UUID 唯一索引兜并发；冲突后必须再验证归属，不泄露其他用户的记录。
-    const data = { params: { keyword: dto.title }, plans: [] }
+    // Existing clients also send the document fallback through the public create route.
+    const title = dto.title === LISTING_DOCUMENT_TITLE[0] ? uiText(...LISTING_DOCUMENT_TITLE) : dto.title
+    const prefix = uiText(LISTING_HISTORY_TITLE_PREFIX, ENGLISH_LISTING_HISTORY_TITLE_PREFIX)
+    const data = { params: { keyword: title }, plans: [] }
     let record: { id: number; historyId: number; history: { userId: number } }
     try {
       record = await this.prisma.listingRun.upsert({
@@ -37,7 +37,7 @@ export class ListingRunService {
           history: {
             create: {
               userId,
-              title: `Listing 生成 · ${dto.title}`.slice(0, 500),
+              title: `${prefix}${title}`.slice(0, 500),
               type: "LISTING_GENERATION",
               data,
               revisions: { create: { version: 1, data } },
@@ -197,7 +197,7 @@ export class ListingRunService {
     if (dto.operation === "score" && !dto.runId) return null
     const run = await this.create(userId, {
       runId: dto.runId ?? randomUUID(),
-      title: LISTING_STEP_LABELS[dto.operation],
+      title: uiText(...LISTING_STEP_LABELS[dto.operation]),
     })
     const step = await this.prisma.listingAiStep.create({
       data: {

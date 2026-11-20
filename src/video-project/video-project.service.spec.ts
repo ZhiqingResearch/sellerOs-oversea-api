@@ -8,6 +8,7 @@ import {
 } from "@nestjs/common"
 import { AiModelExecMode, AiModelModality } from "@prisma/client"
 import { Decimal } from "@prisma/client/runtime/library"
+import { withUiLanguage } from "../common/i18n/request-language"
 import { VideoProjectService } from "./video-project.service"
 
 describe("VideoProjectService AI Gateway 视频任务", () => {
@@ -549,10 +550,13 @@ describe("VideoProjectService 动作复刻 Gateway 迁移", () => {
     return { service, prisma, gateway, gatewayWebhook, usage, task, gatewayTask, batchDto }
   }
 
-  it("批量按 motion_control 提交 Gateway，prompt 空时兜底，报价合计校验余额", async () => {
+  it.each([
+    ["zh-CN", "动作复刻"],
+    ["en-US", "Motion Replication"],
+  ] as const)("%s 批量提交动作复刻，prompt 空时兜底，报价合计校验余额", async (language, prompt) => {
     const { service, prisma, gateway, gatewayWebhook, usage, batchDto } = setup()
 
-    const result = await service.createMotionControlBatch(3, batchDto, 7)
+    const result = await withUiLanguage(language, () => service.createMotionControlBatch(3, batchDto, 7))
 
     // 模型不写死 publicId，只按类别取唯一启用的 MOTION_CONTROL 行
     expect(prisma.aiGatewayModel.findFirst).toHaveBeenCalledWith(
@@ -571,7 +575,7 @@ describe("VideoProjectService 动作复刻 Gateway 迁移", () => {
     expect(gateway.estimateVideoPrice).toHaveBeenCalledWith(
       expect.objectContaining({
         model: "sourcing-kling-v2-6-motion-control",
-        prompt: "动作复刻",
+        prompt,
         mode: "motion_control",
         duration_seconds: 8,
         resolution: "720p",
@@ -598,7 +602,7 @@ describe("VideoProjectService 动作复刻 Gateway 迁移", () => {
         mode: "MOTION_CONTROL",
         model: "sourcing-kling-v2-6-motion-control",
         modelName: "Kling 2.6 动作复刻",
-        prompt: "动作复刻",
+        prompt,
         resolution: "720p",
         durationSec: 8,
         generationParams: expect.objectContaining({ callback: true }),

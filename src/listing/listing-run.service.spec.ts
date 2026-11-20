@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client"
 import { Decimal } from "@prisma/client/runtime/library"
+import { withUiLanguage } from "../common/i18n/request-language"
 import { AiGatewayProvider } from "../common/providers/ai-gateway.provider"
 import { PrismaService } from "../prisma/prisma.service"
 import { UsageService } from "../usage/usage.service"
@@ -7,6 +8,25 @@ import { ListingAiService } from "./listing-ai.service"
 import { ListingRunService } from "./listing-run.service"
 
 describe("Listing 持久化与扣费", () => {
+  it("英文请求保存英文步骤和文档标题，保留商品名", async () => {
+    const upsert = jest.fn().mockResolvedValue({ id: 11, historyId: 1, history: { userId: 3 } })
+    const runs = new ListingRunService({
+      listingRun: { upsert }, listingAiStep: { create: jest.fn() },
+    } as unknown as PrismaService)
+
+    await withUiLanguage("en-US", async () => {
+      await runs.beginStep(3, { operation: "attribute_analysis", userPrompt: "耳机" })
+      await runs.create(3, { runId: "document", title: "产品文档" })
+      await runs.create(3, { runId: "product", title: "耳机" })
+    })
+
+    expect(upsert.mock.calls.map(([args]) => args.create.history.create.title)).toEqual([
+      "Listing Generator · Attribute analysis",
+      "Listing Generator · Product document",
+      "Listing Generator · 耳机",
+    ])
+  })
+
   it.each(["generation", "optimization", "long_title", "category_match", "attribute_analysis"] as const)(
     "一键上架 %s 不创建 Listing 记录或步骤，模型调用仍正常结算",
     async operation => {

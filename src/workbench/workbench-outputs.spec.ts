@@ -1,3 +1,4 @@
+import { withUiLanguage } from "../common/i18n/request-language"
 import { PrismaService } from "../prisma/prisma.service"
 import { WorkbenchFeatureKey, workbenchOutputQueries } from "./workbench-outputs"
 
@@ -78,6 +79,23 @@ describe("workbenchOutputQueries", () => {
 
   it("共注册 20 个功能查询", () => {
     expect(workbenchOutputQueries(prisma as unknown as PrismaService)).toHaveLength(20)
+  })
+
+  it("按请求语言返回功能名，保留历史记录里的商品名", async () => {
+    const queries = workbenchOutputQueries(prisma as unknown as PrismaService)
+    const evidence = queries.find(query => query.key === WorkbenchFeatureKey.ASIN_EVIDENCE)!
+    prisma.asinEvidenceRecord.findMany.mockResolvedValue([
+      { id: "r1", productTitle: "便携榨汁杯", createdAt: since },
+    ])
+
+    await withUiLanguage("en-US", async () => {
+      expect(queries.map(query => query.label).join(" ")).not.toMatch(/\p{Script=Han}/u)
+      expect(evidence.label).toBe("ASIN Evidence")
+      expect(await evidence.latest(7, null, 1)).toMatchObject([
+        { featureLabel: "ASIN Evidence", title: "便携榨汁杯" },
+      ])
+    })
+    expect(evidence.label).toBe("ASIN 取证")
   })
 
   it("ASIN 取证：显式排除软删，标题缺商品名时回落 asin", async () => {
@@ -166,12 +184,31 @@ describe("workbenchOutputQueries", () => {
     expect(items[1].title).toBe("对标分析")
   })
 
+  it("竞品分析：仅翻译旧标题的系统文案", async () => {
+    const query = queryOf(WorkbenchFeatureKey.COMPETITOR)
+    prisma.competitorAnalysisRecord.findMany.mockResolvedValue([
+      { id: "r1", title: "竞品分析 · 2 个竞品", ownAsin: null, sourceKeyword: null, competitorCount: 2, createdAt: since },
+      { id: "r2", title: "保温杯 · 1 个竞品", ownAsin: null, sourceKeyword: "保温杯", competitorCount: 1, createdAt: since },
+      { id: "r3", title: "我方 B0AAAA0001 vs 2 个竞品", ownAsin: "B0AAAA0001", sourceKeyword: null, competitorCount: 2, createdAt: since },
+    ])
+
+    const items = await withUiLanguage("en-US", () => query.latest(7, null, 10))
+    expect(items.map(item => item.title)).toEqual([
+      "Competitor Analysis · 2 competitors",
+      "保温杯 · 1 competitor",
+      "Our ASIN B0AAAA0001 vs 2 competitors",
+    ])
+    expect((await query.latest(7, null, 10))[0].title).toBe("竞品分析 · 2 个竞品")
+  })
+
   it("选品：仅统计 COMPLETED，标题取主类目名", async () => {
     const query = queryOf(WorkbenchFeatureKey.SELECTION)
     prisma.selectionAnalysisRecord.findMany.mockResolvedValue([
       {
         id: "r1",
         primaryCategoryName: "消费电子",
+        primaryCategoryNodeId: "1",
+        categories: [null, { nodeId: "2", name: "Other" }, { nodeId: "1", name: "Consumer Electronics" }],
         createdAt: new Date("2026-09-06T00:00:00.000Z"),
       },
     ])
@@ -183,6 +220,9 @@ describe("workbenchOutputQueries", () => {
 
     const items = await query.latest(7, null, 10)
     expect(items[0].title).toBe("消费电子")
+    expect(await withUiLanguage("en-US", () => query.latest(7, null, 10))).toMatchObject([
+      { title: "Consumer Electronics" },
+    ])
   })
 
   it("智能定价 / 新品推广：productName 作标题", async () => {
@@ -239,6 +279,26 @@ describe("workbenchOutputQueries", () => {
     expect(items[0].featureKey).toBe(WorkbenchFeatureKey.LISTING)
   })
 
+  it("Listing 生成：翻译旧记录的系统前缀和步骤名，保留用户标题", async () => {
+    const query = queryOf(WorkbenchFeatureKey.LISTING)
+    const listingRun = { steps: [{ operation: "attribute_analysis" }] }
+    prisma.history.findMany.mockResolvedValue([
+      { id: 1, title: "Listing 生成 · 属性分析", listingRun, createdAt: since },
+      { id: 2, title: "Listing 生成 · 无线蓝牙耳机", listingRun, createdAt: since },
+      { id: 3, title: "Listing 生成 · 属性分析", listingRun: null, createdAt: since },
+      { id: 4, title: "Listing 生成 · 产品文档", listingRun: { steps: [] }, createdAt: since },
+    ])
+
+    const items = await withUiLanguage("en-US", () => query.latest(7, null, 10))
+    expect(items.map(item => item.title)).toEqual([
+      "Listing Generator · Attribute analysis",
+      "Listing Generator · 无线蓝牙耳机",
+      "Listing 生成 · 属性分析",
+      "Listing Generator · Product document",
+    ])
+    expect((await query.latest(7, null, 10))[0].title).toBe("Listing 生成 · 属性分析")
+  })
+
   it("Listing 打分：只取 LISTING_SCORING 历史，与生成分开统计", async () => {
     const query = queryOf(WorkbenchFeatureKey.LISTING_SCORE)
     prisma.history.findMany.mockResolvedValue([
@@ -285,6 +345,7 @@ describe("workbenchOutputQueries", () => {
       {
         id: 5,
         productName: "竞品复刻 · B0D9LMV4MQ",
+        sourceType: "competitor",
         createdAt: new Date("2026-09-08T00:00:00.000Z"),
       },
     ])
@@ -311,6 +372,9 @@ describe("workbenchOutputQueries", () => {
       recordId: "5",
       title: "竞品复刻 · B0D9LMV4MQ",
     })
+    expect(await withUiLanguage("en-US", () => query.latest(7, since, 5))).toMatchObject([
+      { title: "Competitor recreation · B0D9LMV4MQ" },
+    ])
   })
 
   it("图片生成：STANDARD 成功图 + ImageGenJob 成功 item 两路相加，标题取 prompt 截断", async () => {
@@ -490,6 +554,10 @@ describe("workbenchOutputQueries", () => {
 
   it("动作复刻：仅 MOTION_CONTROL（含 legacy 小写）成功任务", async () => {
     const query = queryOf(WorkbenchFeatureKey.MOTION_REPLICA)
+    prisma.videoTask.findMany.mockResolvedValue([
+      { id: 1, prompt: "动作复刻", createdAt: since },
+      { id: 2, prompt: "转身后挥手", createdAt: since },
+    ])
 
     await query.count(7, since)
     expect(prisma.videoTask.count).toHaveBeenCalledWith({
@@ -502,5 +570,8 @@ describe("workbenchOutputQueries", () => {
         createdAt: { gte: since },
       },
     })
+    expect(await withUiLanguage("en-US", () => query.latest(7, since, 5))).toMatchObject([
+      { title: "Motion Replication" }, { title: "转身后挥手" },
+    ])
   })
 })

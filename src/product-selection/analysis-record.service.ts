@@ -15,6 +15,7 @@ import {
   SelectionAnalysisStepType,
 } from "@prisma/client"
 import { PrismaClientKnownRequestError } from "@prisma/client/runtime/library"
+import { uiText } from "../common/i18n/request-language"
 import { PrismaService } from "../prisma/prisma.service"
 import { validateProductPayload, validateStepPayload } from "./analysis-payload.validator"
 import { hashJson } from "./canonical-json"
@@ -112,7 +113,7 @@ export class AnalysisRecordService {
             primaryCategoryNodeId: primaryNodeId,
             primaryCategoryPath: primaryCategory?.nodeIdPath.trim(),
             primaryCategoryName: primaryCategory
-              ? primaryCategory.nameCn || primaryCategory.name
+              ? uiText(primaryCategory.nameCn || primaryCategory.name, primaryCategory.name)
               : undefined,
             categories,
             pickCount: isProduct ? validation.pickCount : 0,

@@ -5,6 +5,7 @@ import {
   SelectionAnalysisStatus,
   SelectionAnalysisStepType,
 } from "@prisma/client"
+import { withUiLanguage } from "../common/i18n/request-language"
 import { PrismaService } from "../prisma/prisma.service"
 import { AnalysisRecordService } from "./analysis-record.service"
 import { hashJson } from "./canonical-json"
@@ -73,7 +74,10 @@ describe("AnalysisRecordService", () => {
     service = new AnalysisRecordService(prisma as unknown as PrismaService, { chargeFixedModule: jest.fn().mockResolvedValue({}) } as unknown as UsageService)
   })
 
-  it("creates the main record and step 1 in one transaction", async () => {
+  it.each([
+    ["zh-CN", "杯架"],
+    ["en-US", "Cup Holders"],
+  ] as const)("%s creates the main record and step 1 in one transaction", async (language, primaryCategoryName) => {
     prisma.selectionAnalysisRecord.findUnique.mockResolvedValue(null)
     tx.selectionAnalysisRecord.create.mockResolvedValue({
       id: analysisId,
@@ -86,7 +90,7 @@ describe("AnalysisRecordService", () => {
       steps: [{ stepNo: 1, revision: 1 }],
     })
 
-    const result = await service.create(7, {
+    const result = await withUiLanguage(language, () => service.create(7, {
       clientRequestId: "0a49d1d3-84e7-43a0-8a68-c24f0ed93d27",
       marketplace: "us",
       entry: SelectionAnalysisEntry.CATALOG,
@@ -101,7 +105,7 @@ describe("AnalysisRecordService", () => {
       ],
       schemaVersion: 1,
       payload: { diagnosis: [] },
-    })
+    }))
 
     expect(result).toEqual(expect.objectContaining({ analysisId, version: 1 }))
     const createCall = firstCallArg(tx.selectionAnalysisRecord.create)
@@ -109,7 +113,7 @@ describe("AnalysisRecordService", () => {
       data: {
         userId: 7,
         marketplace: "US",
-        primaryCategoryName: "杯架",
+        primaryCategoryName,
         steps: { create: { stepNo: 1 } },
       },
     })
