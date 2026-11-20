@@ -51,9 +51,9 @@ export class AnalyzeCompetitorsDto {
   country!: string
 
   @ApiPropertyOptional({
-    description: "生成竞品 AI 总结使用的模型；未传时使用代码内默认模型",
+    description: "新任务统一使用 Gemini 3.8 Flash，保留旧模型参数兼容已有客户端",
     enum: COMPETITOR_ANALYSIS_MODELS,
-    example: "ZQ-Think-Flash",
+    example: "ZQ-Multimodal-Gemini-3.8-Flash",
   })
   @IsOptional()
   @IsIn(COMPETITOR_ANALYSIS_MODELS)

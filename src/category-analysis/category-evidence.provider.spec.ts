@@ -191,6 +191,15 @@ it("商品和卖家各计一次，画像按天缓存，token探测不计费", as
   await provider.collect(7, category, "US", cached)
   expect(cached.totalCalls).toBe(0)
 })
+it("关键词查询失败时记录实际失败的上游接口", async () => {
+  request.mockRejectedValue(new Error("timeout"))
+  const result = await providerOf().resolveKeywords(["wireless on-ear headphones"], "US", usageOf())
+  expect(result).toMatchObject({
+    candidates: [],
+    failedLookups: ["category/suggestion", "competePatternFlexibleGroupByMonthly"],
+  })
+})
+
 it("关键词反查取数字类目ID、忽略退出榜与重复投票，合并多词候选", async () => {
   request.mockImplementation(options =>
     options.url.endsWith("batchAsinDetail")

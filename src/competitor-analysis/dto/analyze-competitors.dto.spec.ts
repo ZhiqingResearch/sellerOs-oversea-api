@@ -1,4 +1,5 @@
 import { validate } from "class-validator"
+import { DEFAULT_COMPETITOR_ANALYSIS_MODEL } from "../competitor-analysis.models"
 import { AnalyzeCompetitorsDto } from "./analyze-competitors.dto"
 
 function createDto(model?: string): AnalyzeCompetitorsDto {
@@ -10,7 +11,7 @@ function createDto(model?: string): AnalyzeCompetitorsDto {
 }
 
 describe("AnalyzeCompetitorsDto", () => {
-  it.each(["ZQ-Think-Flash", "ZQ-Think-Lite", "ZQ-Think-Pro"])(
+  it.each([DEFAULT_COMPETITOR_ANALYSIS_MODEL, "ZQ-Think-Flash", "ZQ-Think-Lite", "ZQ-Think-Pro"])(
     "允许竞品分析模型 %s",
     async model => {
       await expect(validate(createDto(model))).resolves.toHaveLength(0)

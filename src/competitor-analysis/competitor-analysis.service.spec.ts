@@ -1,8 +1,10 @@
 import { Decimal } from "@prisma/client/runtime/library"
+import { createHash } from "node:crypto"
 import { AiGatewayProvider } from "../common/providers/ai-gateway.provider"
 import { PrismaService } from "../prisma/prisma.service"
 import { UsageService } from "../usage/usage.service"
 import { CompetitorAnalysisRecordService } from "./competitor-analysis-record.service"
+import { DEFAULT_COMPETITOR_ANALYSIS_MODEL } from "./competitor-analysis.models"
 import { CompetitorAnalysisService } from "./competitor-analysis.service"
 import { CompetitorEvidenceProvider } from "./competitor-evidence.provider"
 
@@ -69,12 +71,12 @@ describe("CompetitorAnalysisService", () => {
         },
       },
       tokenUsage: { promptTokens: 100, completionTokens: 20, thinkingTokens: 0 },
-      model: "ZQ-Think-Lite",
+      model: DEFAULT_COMPETITOR_ANALYSIS_MODEL,
       requestId: "req-1",
       billing: {
         costCny: "0.234567",
         currency: "CNY",
-        model: "ZQ-Think-Lite",
+        model: DEFAULT_COMPETITOR_ANALYSIS_MODEL,
         requestId: "req-1",
         requestIds: ["req-1"],
       },
@@ -83,6 +85,11 @@ describe("CompetitorAnalysisService", () => {
       generateJson,
     } as unknown as AiGatewayProvider
     const chargeFixedModule = jest.fn().mockResolvedValue({})
+    const prisma = {
+      businessAiRun: { findUnique: jest.fn(), updateMany: jest.fn() },
+      usageLog: { findUnique: jest.fn().mockResolvedValue({ id: 7 }) },
+      $transaction: jest.fn((work: (tx: unknown) => unknown) => work(prisma)),
+    }
     const service = new CompetitorAnalysisService(
       evidenceProvider,
       aiGatewayProvider,
@@ -90,7 +97,7 @@ describe("CompetitorAnalysisService", () => {
         chargeFixedModule, assertFixedModuleAffordable: jest.fn(),
         gatewayPriceMultiplier: jest.fn().mockResolvedValue(new Decimal("4")),
       } as unknown as UsageService,
-      {} as PrismaService,
+      prisma as unknown as PrismaService,
       {
         create: jest.fn().mockResolvedValue({ recordId: "record-1" }),
       } as unknown as CompetitorAnalysisRecordService
@@ -118,11 +125,11 @@ describe("CompetitorAnalysisService", () => {
     ).toMatchObject({
       method: "ai_generated",
     })
-    expect(result.gateway).toEqual({ model: "ZQ-Think-Lite", requestId: "req-1" })
+    expect(result.gateway).toEqual({ model: DEFAULT_COMPETITOR_ANALYSIS_MODEL, requestId: "req-1" })
     expect(result.billingHandled).toBe(true)
     expect(chargeFixedModule).toHaveBeenCalledWith(8, "competitor.research", {
       quantity: 1,
-      model: "ZQ-Think-Lite",
+      model: DEFAULT_COMPETITOR_ANALYSIS_MODEL,
       requestId: "req-1",
       meta: {
         phase: "analyze",
@@ -233,7 +240,7 @@ describe("CompetitorAnalysisService", () => {
     expect(options.isDataValid({ insights: [], rankings: [] })).toBe(true)
     expect(options.retryInstruction).toContain("insights 数组和 rankings 数组")
     expect(options.maxOutputTokens).toBeUndefined()
-    expect(options.model).toBe("ZQ-Think-Pro")
+    expect(options.model).toBe(DEFAULT_COMPETITOR_ANALYSIS_MODEL)
     expect(options.resolveBilling).toBe(true)
     expect(generateJsonCalls[1]?.[2].maxOutputTokens).toBeUndefined()
 
@@ -246,17 +253,34 @@ describe("CompetitorAnalysisService", () => {
     expect(traffic).toMatchObject({ module: "traffic", status: "success" })
     expect(pricePromo).toMatchObject({ module: "pricePromo", status: "success" })
 
-    const summaryResult = await service.summarize(8, {
+    const summaryInput = {
       country: "US",
       asins: ["B000000001"],
-      model: "ZQ-Think-Lite",
       modules: { profile, traffic, pricePromo },
-    })
+    }
+    const summaryResult = await service.summarize(8, summaryInput)
     expect(summaryResult.summary.insights).toHaveLength(4)
-    expect(summaryResult.gateway).toEqual({ model: "ZQ-Think-Lite", requestId: "req-1" })
+    expect(summaryResult.gateway).toEqual({ model: DEFAULT_COMPETITOR_ANALYSIS_MODEL, requestId: "req-1" })
     expect(generateJsonCalls.at(-1)?.[2]).toEqual(
-      expect.objectContaining({ model: "ZQ-Think-Lite" })
+      expect.objectContaining({ model: DEFAULT_COMPETITOR_ANALYSIS_MODEL })
     )
     expect(generateJsonCalls.at(-1)?.[2].maxOutputTokens).toBeUndefined()
+
+    const [systemPrompt, userPrompt] = generateJsonCalls.at(-1)!
+    const model = "ZQ-Think-Lite"
+    const oldBilling = { model, requestId: "legacy-request", requestIds: ["legacy-request"], costCny: "0.25" }
+    prisma.businessAiRun.findUnique.mockResolvedValue({
+      model,
+      inputHash: createHash("sha256").update(JSON.stringify({ systemPrompt, userPrompt, model })).digest("hex"),
+      outputText: JSON.stringify({ summary: summaryResult.summary }),
+      billing: { billing: oldBilling, tokenUsage: summaryResult.tokenUsage },
+    })
+    generateJson.mockClear()
+    const replay = await service.summarize(8, {
+      ...summaryInput, runId: "legacy-run", model: DEFAULT_COMPETITOR_ANALYSIS_MODEL,
+    })
+    expect(replay.gateway).toEqual({ model, requestId: "legacy-request" })
+    expect(generateJson).not.toHaveBeenCalled()
+    await expect(service.summarize(8, { ...summaryInput, country: "DE", runId: "legacy-run" })).rejects.toThrow("运行号已被其他输入使用")
   })
 })

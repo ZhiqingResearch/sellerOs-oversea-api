@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
+import { withUiLanguage } from "../common/i18n/request-language"
 import { CDQ_SCORE_VERSION, normalizeCdqScoreReport } from "./listing-cdq-score"
 import { buildScoreCorrectionPlan, mergeScoreCorrection } from "./listing-score-correction"
+import { prepareListingScoreDelivery } from "./listing-score-delivery"
+import { buildListingScoreSystemPrompt } from "./listing-score-prompt"
 import { extractScoreRecoveryCore, validateScoreReport } from "./listing-score-recovery"
 
 function createReport() {
@@ -55,6 +58,32 @@ interface ParsedScore {
 }
 
 describe("新版 CDQ 取证与折算", () => {
+  it("英文报告可通过校验，翻译标题和覆盖率说明，保留计算结果和引用", () => {
+    const report = createReport()
+    report.dimensions[0].criteria[2].status = "UNAVAILABLE"
+    report.dimensions[0].criteria[2].score = null
+    Object.assign(report.dimensions[0].criteria[1], {
+      score: 24, status: "MISSING", deductions: [{ points: 1, reason: "Repeated term", evidence: "供应商原文" }],
+    })
+    const chinese = normalizeCdqScoreReport(report) as unknown as ParsedScore
+    const english = withUiLanguage("en-US", () => {
+      const delivered = prepareListingScoreDelivery(JSON.stringify(report), "amazon_us")!
+      return JSON.parse(validateScoreReport(delivered, "amazon_us")) as ParsedScore
+    })
+    expect(english.total).toBe(chinese.total)
+    expect(english.dimensions[0].cdq).toEqual(chinese.dimensions[0].cdq)
+    expect(english.dimensions[0]).toMatchObject({
+      name: "CDQ completeness", subtitle: "Normalized score · Evidence coverage 80% · Excellent",
+    })
+    expect(english.dimensions[0].criteria[0]).toMatchObject({ name: "Structured attributes", score: 30 })
+    expect(english.dimensions[0].criteria[1].deductions).toEqual([
+      { points: 1, reason: "Repeated term", evidence: "供应商原文" },
+    ])
+    expect(english.dimensions[1].name).toBe("Keyword coverage")
+    expect(withUiLanguage("en-US", () => buildListingScoreSystemPrompt(undefined, "")))
+      .toContain("Use English for all scoring labels, descriptions, deduction reasons")
+  })
+
   it("实跑负分只复核异常项，图片扣分保留并统一已取证状态", () => {
     const text = readFileSync(join(__dirname, "fixtures/listing-score-cdq-20260916.json"), "utf8")
     const plan = buildScoreCorrectionPlan(text, "amazon_us")!

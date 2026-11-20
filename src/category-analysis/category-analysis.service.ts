@@ -12,7 +12,7 @@ import { Interval } from "@nestjs/schedule"
 import { Prisma } from "@prisma/client"
 import { createHash, randomUUID } from "crypto"
 import { withOutputLanguage } from "../common/i18n/ai-language"
-import { localizeErrorMessage, uiLanguage, withUiLanguage } from "../common/i18n/request-language"
+import { localizeErrorMessage, uiLanguage, uiText, withUiLanguage } from "../common/i18n/request-language"
 import { AiGatewayProvider } from "../common/providers/ai-gateway.provider"
 import { PrismaService } from "../prisma/prisma.service"
 import { canonicalJson } from "../product-selection/canonical-json"
@@ -377,8 +377,20 @@ export class CategoryAnalysisService {
           }
           resolution = await this.evidence.resolveKeywords(keywords, record.marketplace, resolutionUsage)
           const needsSelection = !categories.length || record.plan === "kw"
-          if (needsSelection && !resolution.candidates.length)
-            throw new BadGatewayException("未找到可用的候选类目，请检查英文拼写或换一个关键词")
+          if (needsSelection && !resolution.candidates.length) {
+            const failedLookups = resolution.failedLookups ?? []
+            if (failedLookups.length) {
+              this.logger.warn(`类目查询失败 id=${record.id} site=${record.marketplace} endpoints=${failedLookups.join(",")}`)
+              throw new BadGatewayException(uiText(
+                "类目数据源暂不可用，请稍后重试",
+                "Category data sources are temporarily unavailable. Please try again later."
+              ))
+            }
+            throw new BadGatewayException(uiText(
+              "未找到可用的候选类目，请检查英文拼写或换一个关键词",
+              "No matching categories found. Check the spelling or try another English keyword."
+            ))
+          }
           const saved = await this.prisma.categoryAnalysisRecord.updateMany({
             where: {
               id: record.id,

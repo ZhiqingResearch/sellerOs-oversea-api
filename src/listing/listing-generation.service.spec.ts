@@ -223,10 +223,11 @@ describe("Listing 后台任务与主生成结算", () => {
     expect(f.gateway.streamChat).not.toHaveBeenCalled()
   })
   it.each([
-    { isUnavailable: false, hasMissingLimits: false },
-    { isUnavailable: true, hasMissingLimits: false },
-    { isUnavailable: true, hasMissingLimits: true },
-  ])("新版CDQ自动评分支持未获取和空满分 %j", async ({ isUnavailable, hasMissingLimits }) => {
+    { isUnavailable: false, hasMissingLimits: false, responseLanguage: "zh-CN" },
+    { isUnavailable: false, hasMissingLimits: false, responseLanguage: "en-US" },
+    { isUnavailable: true, hasMissingLimits: false, responseLanguage: "zh-CN" },
+    { isUnavailable: true, hasMissingLimits: true, responseLanguage: "zh-CN" },
+  ])("新版CDQ自动评分按任务语言恢复，支持未获取和空满分 %j", async ({ isUnavailable, hasMissingLimits, responseLanguage }) => {
     const f = fixture()
     const score = {
       scoreVersion: "cdq-2026-09-16", total: isUnavailable ? null : 100, potential: "评分结果", suggestions: ["建议补充证据"],
@@ -242,11 +243,17 @@ describe("Listing 后台任务与主生成结算", () => {
       })),
     }
     f.prisma.listingAiStep.findUniqueOrThrow.mockResolvedValue({ id: 9, outputText: JSON.stringify(score) })
-    const task = { ...f.task, status: "SCORE_READY", input: { context: { params: { market: "amazon_us" } }, result: JSON.parse(body), autoScoreStepId: 9 }, billing: { ...f.task.billing, score: f.task.billing, isScoreComplete: true } } as unknown as ListingGenerationTask
+    const task = { ...f.task, status: "SCORE_READY", input: { context: { params: { market: "amazon_us" } }, result: JSON.parse(body), autoScoreStepId: 9, responseLanguage }, billing: { ...f.task.billing, score: f.task.billing, isScoreComplete: true } } as unknown as ListingGenerationTask
     await f.service.finalizeScore(task)
     expect(f.runs.update.mock.calls[0][2]).toMatchObject({ status: "COMPLETED", data: { plans: [{ score: isUnavailable ? null : 100, scoreResult: { scoreVersion: "cdq-2026-09-16" } }] } })
     expect(f.ai.chargeSavedOutput).toHaveBeenCalledTimes(isUnavailable ? 0 : 1)
     expect(f.gateway.streamChat).not.toHaveBeenCalled()
+    if (responseLanguage === "en-US") {
+      expect(f.runs.update.mock.calls[0][2]).toMatchObject({ data: { plans: [{ scoreResult: {
+        potential: "S · Ready to publish",
+        dimensions: expect.arrayContaining([expect.objectContaining({ name: "CDQ completeness", subtitle: "Final score · Excellent" })]),
+      } }] } })
+    }
     if (hasMissingLimits) {
       const delivered = (f.runs.update.mock.calls[0][2] as { data: { plans: Array<{ scoreResult: typeof score }> } }).data.plans[0].scoreResult
       expect(delivered.dimensions[0].criteria.map(criterion => criterion.maxScore)).toEqual([30, 25, 20, 15, 5, 5])

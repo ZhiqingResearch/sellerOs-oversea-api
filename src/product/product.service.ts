@@ -9,6 +9,7 @@ import {
   TIKTOK_SHOP_REGIONS,
 } from "../common/providers/apify.provider"
 import { CrawlerError, CrawlerProvider, RawProductData } from "../common/providers/crawler.provider"
+import { isJsonObject } from "../common/utils/canonical-json"
 import { PrismaService } from "../prisma/prisma.service"
 
 @Injectable()
@@ -25,6 +26,7 @@ export class ProductService {
   /** 按 URL 查产品详情：缓存命中直接返回；过期或 miss 则同步调爬虫、写库、写流水 */
   async findByUrl(userId: number, url: string): Promise<Product> {
     const urlHash = sha256(url)
+    const asin = amazonAsinFromPath(url)
     const ttlDays = Number(this.config.get<string | number>("PRODUCT_CACHE_TTL_DAYS") ?? 30)
     const ttlMs = ttlDays * 24 * 3600 * 1000
 
@@ -35,6 +37,9 @@ export class ProductService {
       existing?.platform === "amazon" &&
       (!existing.data || !Object.prototype.hasOwnProperty.call(existing.data, "second_title"))
     if (existing && !hasLegacyHighlightsCache && Date.now() - existing.fetchedAt.getTime() < ttlMs) {
+      if (existing.platform === "amazon" && asin && isJsonObject(existing.data) && existing.data.productId !== asin) {
+        return { ...existing, data: { ...(existing.data as Prisma.JsonObject), productId: asin } }
+      }
       return existing
     }
 
@@ -65,7 +70,9 @@ export class ProductService {
     const platform = detectPlatform(url, raw.platform)
     const name = raw.title ?? ""
     // 显式 null 表示本次爬虫确实未返回副标题，避免无副标题商品反复刷新缓存。
-    const productData = platform === "amazon" ? { second_title: null, ...raw } : raw
+    const productData = platform === "amazon"
+      ? { second_title: null, ...raw, ...(asin ? { productId: asin } : {}) }
+      : raw
     const product = await this.prisma.product.upsert({
       where: { urlHash },
       create: {
@@ -106,6 +113,16 @@ export class ProductService {
 
 function sha256(input: string): string {
   return crypto.createHash("sha256").update(input).digest("hex")
+}
+
+function amazonAsinFromPath(url: string): string | undefined {
+  try {
+    const { pathname } = new URL(url)
+    return /\/(?:dp|gp\/product|gp\/aw\/d|asin)\/([a-z0-9]{10})(?:\/|$)/i
+      .exec(pathname)?.[1].toUpperCase()
+  } catch {
+    return undefined
+  }
 }
 
 function isTikTokShopUrl(url: string): boolean {

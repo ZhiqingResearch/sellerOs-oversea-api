@@ -11,7 +11,7 @@ import {
   modelResponseLanguageDirective,
   modelThinkingContent,
 } from "./prompts/model-response-language"
-import { buildAsinAuditOptimizeSkill } from "./prompts/skill-assembler"
+import { buildAsinAuditOptimizeSkill, MISSING_ORIGINAL_EN, MISSING_ORIGINAL_ZH } from "./prompts/skill-assembler"
 import { extractJson, parseLlmJson } from "./rules/extract-json"
 import { filterForbiddenKeywords } from "./rules/forbidden-words"
 import { normalizeAuditEvidence } from "./rules/normalize-evidence"
@@ -180,9 +180,10 @@ function parseFieldRewrites(v: unknown): AuditFieldRewrite[] {
     const field = asString(r.field)
     const rewritten = asString(r.rewritten)
     if (!field || !rewritten) continue
+    const original = asString(r.original)
     out.push({
       field,
-      original: asString(r.original),
+      original: original.trim() === MISSING_ORIGINAL_ZH ? uiText(MISSING_ORIGINAL_ZH, MISSING_ORIGINAL_EN) : original,
       rewritten,
       reason: asString(r.reason),
     })
@@ -433,7 +434,7 @@ export class AuditOptimizeService {
     const score = dto.score as unknown as AuditScoreResult
     const responseLanguage = dto.responseLanguage ?? uiLanguage()
     const userPrompt = buildAsinAuditOptimizeUserPrompt(evidence, score)
-    const systemPrompt = `${buildAsinAuditOptimizeSkill()}\n\n${modelResponseLanguageDirective(responseLanguage, true)}`
+    const systemPrompt = `${buildAsinAuditOptimizeSkill(responseLanguage)}\n\n${modelResponseLanguageDirective(responseLanguage, true)}`
 
     let textBuffer = ""
     for await (const event of this.gateway.streamChat(systemPrompt, userPrompt, {

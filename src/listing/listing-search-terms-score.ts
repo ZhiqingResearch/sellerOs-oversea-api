@@ -1,4 +1,6 @@
 import { uiText } from "../common/i18n/request-language"
+import { CDQ_DIMENSION_NAME_PATTERNS } from "./listing-cdq-labels"
+import { formatListingScorePotential } from "./listing-cdq-summary"
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value)
 
@@ -8,7 +10,7 @@ export function normalizeUnavailableSearchTerms<T>(value: T): T {
     return value
   const [cdq, keywords] = value.dimensions
   if (!isRecord(cdq) || !/CDQ/i.test(String(cdq.name)) || !isRecord(keywords) ||
-    !/关键词/.test(String(keywords.name)) || keywords.maxScore !== 25 ||
+    !CDQ_DIMENSION_NAME_PATTERNS[1].test(String(keywords.name)) || keywords.maxScore !== 25 ||
     !Array.isArray(keywords.criteria) || keywords.criteria.length !== 5) return value
   const criterion = keywords.criteria[3]
   if (!isRecord(criterion) || criterion.maxScore !== 4 ||
@@ -16,7 +18,7 @@ export function normalizeUnavailableSearchTerms<T>(value: T): T {
   const evidence = [criterion.description, ...(Array.isArray(criterion.deductions)
     ? criterion.deductions.map(item => isRecord(item) ? item.reason : "") : [])].join(" ")
   const isUnavailable = criterion.status === "UNAVAILABLE" ||
-    /未获取|未提供|未抓取|未抓到|无法获取|无法抓取|前台不可见/i.test(evidence)
+    /未获取|未提供|未抓取|未抓到|无法获取|无法抓取|前台不可见|\bsearch terms unavailable\b/i.test(evidence)
   if (!isUnavailable || (criterion.score !== null &&
     (typeof criterion.score !== "number" || !Number.isFinite(criterion.score) ||
       criterion.score < 0 || criterion.score > 4)) ||
@@ -34,13 +36,7 @@ export function normalizeUnavailableSearchTerms<T>(value: T): T {
     !(Array.isArray(report.severeDefects) && report.severeDefects.length) &&
     !(/^D\s*(?:级|·)/.test(String(report.potential)) && report.total <= 54)) {
     report.total = Math.min(100, Math.round((report.total + restoredScore) * 10000) / 10000)
-    if (restoredScore > 0) {
-      const total = Number(report.total)
-      report.potential = total >= 90 ? uiText("S级 · 可直接上线", "S · Ready to publish")
-        : total >= 80 ? uiText("A级 · 小幅调整后上线", "A · Publish after minor changes")
-        : total >= 68 ? uiText("B级 · 优化后上线", "B · Publish after optimization")
-        : total >= 55 ? uiText("C级 · 建议重新生成", "C · Regeneration recommended") : uiText("D级 · 必须重新生成", "D · Regeneration required")
-    }
+    if (restoredScore > 0) report.potential = formatListingScorePotential(Number(report.total))
   }
   return report as T
 }

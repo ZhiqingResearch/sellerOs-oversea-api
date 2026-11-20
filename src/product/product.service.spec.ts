@@ -65,6 +65,22 @@ describe("ProductService", () => {
   })
 
   describe("缓存命中", () => {
+    it("带查询参数的 Amazon 链接从路径取 ASIN，兼容新抓取和已有缓存", async () => {
+      const asin = "B0CZPGX972"
+      const url = `https://www.amazon.com/dp/${asin}?ref=tracking&asin=B000000001`
+      const raw = { ...amazonRaw, url, productId: `${asin}?ref=tracking&asin=B000000001` }
+      prisma.product.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce({
+        platform: "amazon", data: raw, fetchedAt: new Date(),
+      })
+      crawler.fetchPdp.mockResolvedValue(raw)
+      prisma.product.upsert.mockImplementation(async ({ create }) => ({ id: 1, ...create }))
+
+      expect((await service.findByUrl(USER_ID, url)).data).toMatchObject({ productId: asin, url })
+      expect((await service.findByUrl(USER_ID, url)).data).toMatchObject({ productId: asin, url })
+      expect(crawler.fetchPdp).toHaveBeenCalledTimes(1)
+      expect(prisma.product.upsert).toHaveBeenCalledTimes(1)
+    })
+
     it("旧 Amazon 缓存没有 second_title 时重新抓取并保留真实副标题", async () => {
       const legacyData = { ...amazonRaw } as Record<string, unknown>
       delete legacyData.second_title

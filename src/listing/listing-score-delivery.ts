@@ -1,6 +1,10 @@
 import { Logger } from "@nestjs/common"
+import { uiLanguage } from "../common/i18n/request-language"
+import { isJsonObject } from "../common/utils/canonical-json"
 import { parseListingJsonObject } from "./listing-result-parser"
-import { recalculateCdqScoreSummary } from "./listing-cdq-summary"
+import { CDQ_CRITERION_NAMES_EN, CDQ_DIMENSION_NAMES_EN } from "./listing-cdq-labels"
+import { CDQ_SCORE_VERSION } from "./listing-cdq-score"
+import { formatCdqSubtitle, recalculateCdqScoreSummary } from "./listing-cdq-summary"
 import { recalculateListingAlexaScore } from "./listing-alexa-score"
 import { validateScoreReport } from "./listing-score-recovery"
 import { validateListingReportRules, type ListingRuleContext } from "./listing-score-rules"
@@ -43,6 +47,21 @@ export function prepareListingScoreDelivery(
   // 汇总由已交付的细则得分计算，不触发规则校对或模型重试。
   report = normalizeListingScoreArithmetic(report)
   report = recalculateCdqScoreSummary(report)
+  if (uiLanguage() === "en-US" && report.scoreVersion === CDQ_SCORE_VERSION) {
+    const dimensions = report.dimensions as Array<{ name: string; criteria: Array<{ name: string }>; cdq?: unknown; subtitle?: string }>
+    dimensions.forEach((dimension, index) => {
+      dimension.name = CDQ_DIMENSION_NAMES_EN[index]
+      dimension.criteria.forEach((criterion, criterionIndex) => {
+        criterion.name = CDQ_CRITERION_NAMES_EN[index][criterionIndex]
+      })
+    })
+    const [dimension] = dimensions
+    const cdq = dimension.cdq
+    if (isJsonObject(cdq) && typeof cdq.effectiveMax === "number" && typeof cdq.applicableMax === "number" &&
+      (typeof cdq.normalizedScore === "number" || cdq.normalizedScore === null)) {
+      dimension.subtitle = formatCdqSubtitle(cdq.normalizedScore, cdq.effectiveMax, cdq.applicableMax)
+    }
+  }
   return JSON.stringify(report)
 }
 /** 在首次生成阶段约束完整性，不把事后模型自检变成用户操作的前置条件。 */

@@ -1,5 +1,7 @@
 import { normalizeUnavailableSearchTerms } from "./listing-search-terms-score"
 import { normalizeCdqImageCriterion } from "./listing-cdq-image-score"
+import { CDQ_DIMENSION_NAME_PATTERNS } from "./listing-cdq-labels"
+import { formatCdqSubtitle, formatListingScorePotential } from "./listing-cdq-summary"
 
 /** CDQ 标准化提示词 2026-09-16；前后端共用同一契约（同步文件）。 */
 export const CDQ_SCORE_VERSION = "cdq-2026-09-16"
@@ -10,7 +12,6 @@ const OTHER_LIMITS = [
   [10, 6, 4],
   [7, 5, 3],
 ]
-const DIMENSION_NAMES = [/^CDQ完整性$/, /关键词/, /COSMO/i, /Alexa/i]
 const roundScore = (value: number) => Math.round(value * 10000) / 10000
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value)
@@ -41,7 +42,7 @@ export function normalizeCdqScoreReport(value: unknown): Record<string, unknown>
     if (
       !isRecord(dimension) ||
       typeof dimension.name !== "string" ||
-      !DIMENSION_NAMES[index].test(dimension.name) ||
+      !CDQ_DIMENSION_NAME_PATTERNS[index].test(dimension.name) ||
       dimension.maxScore !== DIMENSION_LIMITS[index] ||
       dimension.weight !== DIMENSION_LIMITS[index] ||
       !Array.isArray(dimension.criteria) ||
@@ -111,20 +112,7 @@ export function normalizeCdqScoreReport(value: unknown): Record<string, unknown>
         normalizedScore,
         evidenceCoverage: applicableMax > 0 ? effectiveMax / applicableMax : null,
       }
-      const grade =
-        normalizedScore === null
-          ? ""
-          : normalizedScore >= 90
-            ? "优秀"
-            : normalizedScore >= 80
-              ? "良好"
-              : normalizedScore >= 60
-                ? "一般"
-                : "待改善"
-      dimension.subtitle =
-        effectiveMax === 0
-          ? "未获取评分证据 · 暂不出分"
-          : `${effectiveMax === applicableMax ? "完整最终分" : `折算分 · 证据覆盖率 ${roundScore((100 * effectiveMax) / applicableMax)}%`} · ${grade}`
+      dimension.subtitle = formatCdqSubtitle(normalizedScore, effectiveMax, applicableMax)
     } else if (
       typeof dimension.score !== "number" ||
       !Number.isFinite(dimension.score) ||
@@ -138,18 +126,7 @@ export function normalizeCdqScoreReport(value: unknown): Record<string, unknown>
       ? roundScore(dimensions.reduce((sum, dimension) => sum + Number(dimension.score), 0))
       : null
   report.total = total
-  report.potential =
-    total === null
-      ? "证据不足 · 暂不出综合分"
-      : total >= 90
-        ? "S级 · 可直接上线"
-        : total >= 80
-          ? "A级 · 小幅调整后上线"
-          : total >= 68
-            ? "B级 · 优化后上线"
-            : total >= 55
-              ? "C级 · 建议重新生成"
-              : "D级 · 必须重新生成"
+  report.potential = formatListingScorePotential(total)
   // 新版标题违禁仅影响标题子项；旧报告的全局归零标记不得传入新模型。
   delete report.severeDefects
   return report

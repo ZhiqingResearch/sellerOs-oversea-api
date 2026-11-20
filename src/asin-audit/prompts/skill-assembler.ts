@@ -1,6 +1,7 @@
 // ASIN 审计 skill 装配器（从 Web lib/skill-assembler.ts 等价迁移的三个 build 函数，
 // md 常量由编译产物替换为 prompt-assets 运行时加载；交付包提交 1fd586c）。
 
+import { uiLanguage, type UiLanguage } from "../../common/i18n/request-language"
 import {
   PROMPT_ASIN_AUDIT_OPTIMIZE,
   PROMPT_ASIN_AUDIT_SCORE,
@@ -15,6 +16,8 @@ import {
 } from "./prompt-assets"
 
 const SECTION_SEP = "\n\n---\n\n"
+export const MISSING_ORIGINAL_ZH = "（原字段缺失）"
+export const MISSING_ORIGINAL_EN = "Original field unavailable"
 
 /** Wrap a loaded reference with a marker matching the existing `## 已加载 references/xxx.md` convention. */
 function loaded(file: string, body: string): string {
@@ -64,11 +67,14 @@ export function buildAsinAuditScoreSkill(category?: "computer" | null): string {
 /**
  * Build the ASIN audit 第三步优化交付物 system prompt.
  */
-export function buildAsinAuditOptimizeSkill(): string {
+export function buildAsinAuditOptimizeSkill(language: UiLanguage = uiLanguage()): string {
+  const deliverables = PROMPT_REF_OPTIMIZE_DELIVERABLES()
   return [
     PROMPT_ASIN_AUDIT_OPTIMIZE(),
     loaded("sensitive-words.md", PROMPT_REF_SENSITIVE_WORDS()),
-    loaded("optimize-deliverables.md", PROMPT_REF_OPTIMIZE_DELIVERABLES()),
+    loaded("optimize-deliverables.md", language === "en-US"
+      ? deliverables.replace(MISSING_ORIGINAL_ZH, MISSING_ORIGINAL_EN)
+      : deliverables),
     loaded("traffic-optimization.md", PROMPT_REF_TRAFFIC_OPTIMIZATION()),
   ].join(SECTION_SEP)
 }

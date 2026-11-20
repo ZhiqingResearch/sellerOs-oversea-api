@@ -11,6 +11,7 @@ import { PrismaService } from "../prisma/prisma.service"
 import { UsageService } from "../usage/usage.service"
 import { CompetitorAnalysisRecordService } from "./competitor-analysis-record.service"
 import { assembleCompetitorAnalysis } from "./competitor-analysis.assembler"
+import { DEFAULT_COMPETITOR_ANALYSIS_MODEL } from "./competitor-analysis.models"
 import { buildCompetitorAnalysisPrompts } from "./competitor-analysis.prompts"
 import {
   AiCompetitorAnalysis,
@@ -95,7 +96,7 @@ export class CompetitorAnalysisService {
         isDataValid: value => this._isAnalysisComplete(value),
         retryInstruction:
           "顶层必须且只能包含 summary；summary 必须同时包含 insights 数组和 rankings 数组，两个数组都不可省略。",
-        model: dto.model,
+        model: DEFAULT_COMPETITOR_ANALYSIS_MODEL,
         resolveBilling: true,
       }
     )
@@ -184,7 +185,7 @@ export class CompetitorAnalysisService {
             isDataValid: value => this._isAnalysisComplete(value),
             retryInstruction:
               "顶层必须且只能包含 summary；summary 必须同时包含 insights 数组和 rankings 数组，两个数组都不可省略。",
-            model: dto.model,
+            model: DEFAULT_COMPETITOR_ANALYSIS_MODEL,
             resolveBilling: true,
           }
         )
@@ -225,15 +226,16 @@ export class CompetitorAnalysisService {
     billing: CompetitorRunBillingSnapshot
   } | null> {
     if (!dto.runId) return null
-    const inputHash = createHash("sha256")
+    const hashForModel = (model: string) => createHash("sha256")
       .update(
         JSON.stringify({
           systemPrompt: prompts.systemPrompt,
           userPrompt: prompts.userPrompt,
-          model: dto.model ?? "ZQ-Think-Flash",
+          model,
         })
       )
       .digest("hex")
+    const inputHash = hashForModel(DEFAULT_COMPETITOR_ANALYSIS_MODEL)
     const where = {
       userId_module_operation_runId: {
         userId,
@@ -244,7 +246,9 @@ export class CompetitorAnalysisService {
     }
     const existing = await this.prisma.businessAiRun.findUnique({ where })
     if (existing) {
-      if (existing.inputHash !== inputHash) throw new ConflictException("运行号已被其他输入使用")
+      // Older rows were hashed with the model selected when they were created.
+      if (existing.inputHash !== inputHash && existing.inputHash !== hashForModel(existing.model))
+        throw new ConflictException("运行号已被其他输入使用")
       if (existing.outputText && existing.billing) {
         return {
           outputText: existing.outputText,
@@ -256,7 +260,7 @@ export class CompetitorAnalysisService {
       }
       const claimed = await this.prisma.businessAiRun.updateMany({
         where: { id: existing.id, status: "FAILED", outputText: null },
-        data: { status: "RUNNING", error: null },
+        data: { status: "RUNNING", error: null, model: DEFAULT_COMPETITOR_ANALYSIS_MODEL, inputHash },
       })
       if (claimed.count === 0) throw new ConflictException("本次竞品分析正在恢复")
       return null
@@ -269,7 +273,7 @@ export class CompetitorAnalysisService {
           runId: dto.runId,
           module: "competitor-analysis",
           operation: "summary",
-          model: dto.model ?? "ZQ-Think-Flash",
+          model: DEFAULT_COMPETITOR_ANALYSIS_MODEL,
           inputHash,
         },
       })

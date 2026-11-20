@@ -1,4 +1,5 @@
 import { uiText } from "../common/i18n/request-language"
+import { CDQ_CRITERION_NAMES_EN } from "./listing-cdq-labels"
 import { CDQ_DIMENSION_METADATA } from "./listing-score-correction"
 
 const isRecord = (value: unknown): value is Record<string, any> =>
@@ -33,7 +34,8 @@ export function normalizeListingScoreStructure(report: Record<string, unknown>, 
     const criteria = dimensionMetadata.criteria.map(([name, maxScore], criterionIndex) => {
       const criterion = originalCriteria.length === dimensionMetadata.criteria.length ? originalCriteria[criterionIndex]
         : originalCriteria.find(item => String(item.name).startsWith(name) ||
-          (isAmazon && CRITERION_NAMES[index]?.[criterionIndex]?.test(String(item.name))))
+          (isAmazon && (item.name === CDQ_CRITERION_NAMES_EN[index]?.[criterionIndex] ||
+            CRITERION_NAMES[index]?.[criterionIndex]?.test(String(item.name)))))
       if (!criterion) hasPending = true
       return { ...criterion, name: typeof criterion?.name === "string" ? criterion.name : name, maxScore,
         score: criterion?.score ?? null,

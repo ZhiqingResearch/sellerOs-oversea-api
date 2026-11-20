@@ -93,6 +93,7 @@ export interface KeywordResolution {
   candidates: CategoryCandidate[]
   topAsins: string[]
   notices: string[]
+  failedLookups?: string[]
   confirmedIds?: string[]
 }
 export interface CategoryEvidence {

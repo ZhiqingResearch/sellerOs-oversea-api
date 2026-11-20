@@ -302,9 +302,11 @@ export class ListingGenerationService implements OnModuleInit, OnModuleDestroy {
     let scoreError: string | undefined
     try {
       const market = String((input.context.params as { market?: string })?.market ?? "")
-      const deliveryText = prepareListingScoreDelivery(step.outputText ?? "", market || undefined, {
-        sourceFacts: parseListingScoreSource(input.autoScore?.userPrompt ?? ""),
-      })
+      const deliveryText = withUiLanguage(savedUiLanguage(input.responseLanguage), () =>
+        prepareListingScoreDelivery(step.outputText ?? "", market || undefined, {
+          sourceFacts: parseListingScoreSource(input.autoScore?.userPrompt ?? ""),
+        })
+      )
       if (!deliveryText) throw new Error(task.error || "自动评分未返回内容，正文已保留")
       scoreResult = JSON.parse(deliveryText)
     } catch (error) { scoreError = errorMessage(error) }

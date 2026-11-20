@@ -627,7 +627,7 @@ describe("AsinAudit 服务（评分/优化/痛点 + 计费）", () => {
             fieldRewrites: [
               {
                 field: "Bullet 1",
-                original: "Original",
+                original: "（原字段缺失）",
                 rewritten: listing.bullets[0],
                 reason: "回应真实使用需求",
               },
@@ -647,7 +647,12 @@ describe("AsinAudit 服务（评分/优化/痛点 + 计费）", () => {
         7
       ))
         events.push(event)
-      expect(events.at(-1)).toMatchObject({ type: "result", data: { listing } })
+      const missingOriginal = responseLanguage === "en-US" ? "Original field unavailable" : "（原字段缺失）"
+      expect(events.at(-1)).toMatchObject({
+        type: "result", data: { listing, fieldRewrites: [{ original: missingOriginal }] },
+      })
+      expect(gateway.streamChat.mock.calls[0][0]).toContain(missingOriginal)
+      if (responseLanguage === "en-US") expect(gateway.streamChat.mock.calls[0][0]).not.toContain("（原字段缺失）")
       expect(gateway.streamChat).toHaveBeenCalledWith(
         expect.stringContaining("Bullet 的标签和整段正文"),
         expect.stringContaining(`目标商品文案语言：${language}`),

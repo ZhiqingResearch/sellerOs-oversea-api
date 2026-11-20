@@ -382,6 +382,23 @@ describe("关键词任务分流与确认", () => {
     topAsins: [],
     notices: [],
   }
+  it.each([
+    [[], "No matching categories found. Check the spelling or try another English keyword."],
+    [["category/suggestion"], "Category data sources are temporarily unavailable. Please try again later."],
+  ])("类目查无匹配时按上游状态返回错误 %j", async (failedLookups, error) => {
+    const ctx = setup()
+    ctx.record.plan = "kw"
+    ctx.record.keywords = ["wireless on-ear headphones"]
+    ctx.record.resolution = null
+    ctx.data.resolveKeywords.mockResolvedValue({ ...resolution, candidates: [], failedLookups })
+
+    await ctx.service.processPendingTasks()
+
+    expect(ctx.tx.categoryAnalysisRecord.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: "FAILED", error }),
+    }))
+    expect(ctx.usage.chargeFixedModule).not.toHaveBeenCalled()
+  })
   it.each([false, true])("关键词口径即使原有选择也需确认实际类目数量，已定位=%s", async hasResolution => {
     const ctx = setup()
     ctx.record.plan = "kw"

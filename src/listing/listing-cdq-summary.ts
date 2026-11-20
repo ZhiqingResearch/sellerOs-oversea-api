@@ -9,6 +9,32 @@ const isFiniteScore = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value) && Math.abs(value) <= Number.MAX_SAFE_INTEGER
 const roundScore = (value: number) => Math.round(value * 10000) / 10000
 
+export function formatListingScorePotential(total: number | null): string {
+  return total === null ? uiText("证据不足 · 暂不出综合分", "Insufficient evidence · Overall score pending")
+    : total >= 90 ? uiText("S级 · 可直接上线", "S · Ready to publish")
+    : total >= 80 ? uiText("A级 · 小幅调整后上线", "A · Publish after minor changes")
+    : total >= 68 ? uiText("B级 · 优化后上线", "B · Publish after optimization")
+    : total >= 55 ? uiText("C级 · 建议重新生成", "C · Regeneration recommended")
+    : uiText("D级 · 必须重新生成", "D · Regeneration required")
+}
+
+export function formatCdqSubtitle(
+  normalizedScore: number | null,
+  effectiveMax: number,
+  applicableMax: number
+): string {
+  if (normalizedScore === null || effectiveMax <= 0 || applicableMax <= 0)
+    return uiText("未获取评分证据 · 暂不出分", "Scoring evidence unavailable · No score yet")
+  const grade = normalizedScore >= 90 ? uiText("优秀", "Excellent")
+    : normalizedScore >= 80 ? uiText("良好", "Good")
+    : normalizedScore >= 60 ? uiText("一般", "Fair")
+    : uiText("待改善", "Needs improvement")
+  const coverage = roundScore((100 * effectiveMax) / applicableMax)
+  const label = effectiveMax === applicableMax ? uiText("完整最终分", "Final score")
+    : uiText(`折算分 · 证据覆盖率 ${coverage}%`, `Normalized score · Evidence coverage ${coverage}%`)
+  return `${label} · ${grade}`
+}
+
 export function recalculateCdqScoreSummary<T>(value: T): T {
   if (!isRecord(value) || value.scoreVersion !== CDQ_SCORE_VERSION ||
     !Array.isArray(value.dimensions) || value.dimensions.length !== 4) return value
@@ -38,12 +64,6 @@ export function recalculateCdqScoreSummary<T>(value: T): T {
   const normalizedScore = effectiveMax > 0 ? roundScore(100 * earnedScore / effectiveMax) : null
   const score = effectiveMax > 0 ? roundScore(CDQ_WEIGHT * earnedScore / effectiveMax) : null
   const total = score === null ? null : roundScore(score + otherDimensions.reduce((sum, item) => sum + item.score, 0))
-  const potential = total === null ? uiText("证据不足 · 暂不出综合分", "Insufficient evidence · Overall score pending")
-    : total >= 90 ? uiText("S级 · 可直接上线", "S · Ready to publish")
-    : total >= 80 ? uiText("A级 · 小幅调整后上线", "A · Publish after minor changes")
-    : total >= 68 ? uiText("B级 · 优化后上线", "B · Publish after optimization")
-    : total >= 55 ? uiText("C级 · 建议重新生成", "C · Regeneration recommended")
-    : uiText("D级 · 必须重新生成", "D · Regeneration required")
   return {
     ...value,
     dimensions: [{
@@ -56,6 +76,6 @@ export function recalculateCdqScoreSummary<T>(value: T): T {
       },
     }, ...otherDimensions],
     total,
-    potential,
+    potential: formatListingScorePotential(total),
   }
 }

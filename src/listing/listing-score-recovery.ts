@@ -3,10 +3,11 @@ import { parseListingJsonObject } from "./listing-result-parser"
 import { validateListingScoreOutput } from "./listing-score-validation"
 
 import { isCdqScoreReport } from "./listing-cdq-score"
+import { CDQ_DIMENSION_NAME_PATTERNS } from "./listing-cdq-labels"
 
 const AMAZON_LIMITS = [
   { name: /CDQ/i, maxScore: 40, criteria: [12, 10, 8, 6, 2, 2] },
-  { name: /关键词/, maxScore: 25, criteria: [7, 7, 5, 4, 2] },
+  { name: CDQ_DIMENSION_NAME_PATTERNS[1], maxScore: 25, criteria: [7, 7, 5, 4, 2] },
   { name: /COSMO/i, maxScore: 20, criteria: [10, 6, 4] },
   { name: /Alexa/i, maxScore: 15, criteria: [7, 5, 3] },
 ]

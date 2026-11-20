@@ -4,6 +4,8 @@ import { validateScoreCore, validateScoreReport } from "./listing-score-recovery
 import { validateListingScoreOutput } from "./listing-score-validation"
 
 import { isCdqScoreReport } from "./listing-cdq-score"
+import { CDQ_CRITERION_NAMES_EN, CDQ_DIMENSION_NAME_PATTERNS } from "./listing-cdq-labels"
+import { formatListingScorePotential } from "./listing-cdq-summary"
 import { normalizeCdqImageCriterion } from "./listing-cdq-image-score"
 import { getListingEvidenceRequirement, projectListingCriterionEvidence } from "./listing-score-evidence"
 import { buildListingEvidencePrompt, lockListingLongtailTerms } from "./listing-score-evidence-flow"
@@ -165,17 +167,17 @@ function hasCountRule(value: unknown): boolean {
 }
 
 export const CDQ_DIMENSION_METADATA = [
-  { name: "CDQ完整性", namePattern: /^CDQ完整性$/, maxScore: 40, criteria: [
+  { name: "CDQ完整性", namePattern: CDQ_DIMENSION_NAME_PATTERNS[0], maxScore: 40, criteria: [
     ["结构化属性", 30], ["标题质量", 25], ["变体质量", 20], ["图片质量", 15], ["A+ 内容", 5], ["五点描述", 5],
   ] },
-  { name: "关键词覆盖", namePattern: /关键词/, maxScore: 25, criteria: [
+  { name: "关键词覆盖", namePattern: CDQ_DIMENSION_NAME_PATTERNS[1], maxScore: 25, criteria: [
     ["核心关键词进入标题前75字符", 7], ["S/A级关键词覆盖标题和Bullet", 7], ["B/C级长尾词覆盖", 5],
     ["后台搜索词写满且与标题不重复", 4], ["关键词真实可承接", 2],
   ] },
-  { name: "COSMO关系覆盖", namePattern: /COSMO/i, maxScore: 20, criteria: [
+  { name: "COSMO关系覆盖", namePattern: CDQ_DIMENSION_NAME_PATTERNS[2], maxScore: 20, criteria: [
     ["通用高优先级4类全部覆盖", 10], ["品类驱动关系已覆盖", 6], ["中优先级关系覆盖至少3类", 4],
   ] },
-  { name: "Alexa语义质量", namePattern: /Alexa/i, maxScore: 15, criteria: [
+  { name: "Alexa语义质量", namePattern: CDQ_DIMENSION_NAME_PATTERNS[3], maxScore: 15, criteria: [
     ["标题语义连贯性", 7], ["每条Bullet包含可验证数据点", 5], ["描述包含具体使用场景与结构化规格", 3],
   ] },
 ] as const
@@ -428,7 +430,8 @@ function extractNamedReportCorrections(patch: Record<string, unknown>, plan: Sco
     const dimension = dimensions.get(target.dimensionIndex)!
     const original = plan.report.dimensions[target.dimensionIndex]?.criteria[target.criterionIndex]
     const canonicalName = CDQ_DIMENSION_METADATA[target.dimensionIndex]?.criteria[target.criterionIndex]?.[0]
-    const names = [normalizeCorrectionName(original?.name), normalizeCorrectionName(canonicalName)]
+    const names = [original?.name, canonicalName, CDQ_CRITERION_NAMES_EN[target.dimensionIndex]?.[target.criterionIndex]]
+      .map(normalizeCorrectionName)
       .filter((name): name is string => !!name)
     const matches = (dimension.criteria as unknown[]).filter(isCorrectionRecord)
       .filter(criterion => names.includes(normalizeCorrectionName(criterion.name) ?? ""))
@@ -686,7 +689,7 @@ export function mergeScoreCorrection(
   }
   if (plan.criteria.length) {
     const sum = result.dimensions.reduce((value, dimension) => value + dimension.score, 0)
-    const hasPolicyCap = /^D\s*级/.test(plan.report.potential) && plan.report.total <= 54
+    const hasPolicyCap = /^D\s*(?:级|·)/.test(plan.report.potential) && plan.report.total <= 54
     result.total = result.severeDefects?.length
       ? 0
       : hasPolicyCap
@@ -694,16 +697,7 @@ export function mergeScoreCorrection(
         : Math.min(100, Math.round(sum * 10000) / 10000)
     // Amazon 评级与展示端使用同一分段；其他平台保留其自己的评级契约。
     if (market?.startsWith("amazon_") || /CDQ/i.test(result.dimensions[0].name))
-      result.potential =
-        result.total >= 90
-          ? "S级 · 可直接上线"
-          : result.total >= 80
-            ? "A级 · 小幅调整后上线"
-            : result.total >= 68
-              ? "B级 · 优化后上线"
-              : result.total >= 55
-                ? "C级 · 建议重新生成"
-                : "D级 · 必须重新生成"
+      result.potential = formatListingScorePotential(result.total)
   }
   const validated = validateScoreReport(JSON.stringify(result), market)
   if (buildScoreCorrectionPlan(validated, market)) return fail()

@@ -520,6 +520,7 @@ export class CategoryEvidenceProvider {
     const merged = new Map<string, CategoryCandidate>()
     const topAsins = new Set<string>()
     const notices: string[] = []
+    const failedLookups = new Set<string>()
     for (const keyword of keywords) {
       const direct: Record<string, unknown>[] = []
       const votes = new Map<string, CategoryCandidate>()
@@ -530,12 +531,14 @@ export class CategoryEvidenceProvider {
           ).slice(0, 3)
         )
       } catch {
+        failedLookups.add("category/suggestion")
         notices.push(uiText(`「${keyword}」类目名称匹配暂不可用`, `Category-name matching is unavailable for “${keyword}”`))
       }
+      let endpoint = "competePatternFlexibleGroupByMonthly"
       try {
         const patterns = asRows(
           await this._sif(
-            "competePatternFlexibleGroupByMonthly",
+            endpoint,
             site,
             {
               keywords: [keyword],
@@ -557,8 +560,9 @@ export class CategoryEvidenceProvider {
           ),
         ].slice(0, 20)
         asins.forEach(asin => topAsins.add(asin))
+        endpoint = "batchAsinDetail"
         const details = asins.length
-          ? asRows(await this._sif("batchAsinDetail", site, { asins: asins.slice(0, 10) }, usage))
+          ? asRows(await this._sif(endpoint, site, { asins: asins.slice(0, 10) }, usage))
           : []
         for (const row of details) {
           const seen = new Set<string>()
@@ -580,6 +584,7 @@ export class CategoryEvidenceProvider {
           }
         }
       } catch {
+        failedLookups.add(endpoint)
         notices.push(uiText(`「${keyword}」头部商品反查暂不可用`, `Leading-product reverse lookup is unavailable for “${keyword}”`))
       }
       const candidates = [...votes.values()].sort((a, b) => b.hits - a.hits || b.sales - a.sales)
@@ -612,6 +617,7 @@ export class CategoryEvidenceProvider {
       ),
       topAsins: [...topAsins],
       notices,
+      ...(failedLookups.size ? { failedLookups: [...failedLookups] } : {}),
     }
   }
 
