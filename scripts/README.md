@@ -33,7 +33,7 @@
 | `fix-teamplan-inject.ts` | 一次性修复（2026-08-29 QA 回归10）：TEAM_PLAN packChoice=inject 未生效期间滞留个人户的 RECHARGE 批次按单补注入企业共享池。需 `--user/--team/--order` 三参数，幂等，`--dry-run` |
 | `restore-grace-team-lots.ts` | 存量修复 2026-08-29 生命周期 bug：每日过期任务误回收 GRACE 团队套餐/赠送批次的恢复（remaining 回写+ACTIVE+MANUAL_ADJUST 补偿流水）。幂等，`--dry-run`；**ts-node 方式跑** |
 | `create-custom-team.ts` | 平台定制开通企业（不走订单/支付，联调/线下合同客户用）；默认给 18888888888 开「内部测试企业」（10 席/365 天/池 50000 套餐+20000 充值积分），TEAM_* 环境变量可覆盖。幂等；**必须 ts-node 方式跑** |
-| `create-internal-account.ts` | 创建菜单/路由配置专用内部账号（默认 18888888888 / OS0911，绑内置超管 ADMIN）。幂等，`--reset-password` 才重置密码，PHONE/PASSWORD 环境变量覆盖；前置先跑 seed |
+| `create-internal-account.ts` | 创建内部账号（默认 18888888888 / OS0911，绑内置超管 ADMIN）。幂等，`--reset-password` 才重置密码，PHONE/PASSWORD 环境变量覆盖；前置先跑 seed |
 | `create-open-api-app.ts` | OpenApiApp 接入方管理：创建生成 appId/appSecret（secret 只打印一次）、`--disable <appId>` 停用、`--list` 列表。`npx ts-node scripts/create-open-api-app.ts <名> [单笔上限元]` |
 | `seed-distribution-permissions.ts` | 一次性补两个分销菜单权限键（management.distribution / tool.distribution）并绑到内置 ADMIN 角色；只补缺不覆盖（替代全量 seed 防回写运营手调配置）。幂等，`--dry-run` |
 | `set-internal-ops-balance.ts` | 把「运营专员（内部）」（OPS_SPECIALIST 角色）用户总额度统一调为 10000。默认 dry-run，`--apply` 写库，`--include-inactive` 含停用账号。属旧 balance 体系时代的工具 |

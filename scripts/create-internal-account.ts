@@ -1,5 +1,5 @@
 /**
- * 创建内部账号（菜单/路由配置专用，见 src/auth/guards/internal-account.guard.ts）。
+ * 创建内部管理员账号。
  *
  * 默认：手机号 18888888888，密码 OS0911，用户名「内部账号」，并绑定内置超级管理员角色（code=ADMIN）。
  *
@@ -13,9 +13,6 @@
  *   npx ts-node scripts/create-internal-account.ts
  *   npx ts-node scripts/create-internal-account.ts --reset-password
  *   PHONE=19999999999 PASSWORD=xxx npx ts-node scripts/create-internal-account.ts   # 覆盖默认值
- *
- * 注意：该账号能否访问 /api/menus* 由环境变量 INTERNAL_ACCOUNT_PHONE 决定（默认即 18888888888）；
- *       若用 PHONE 覆盖了手机号，记得同步改服务端的 INTERNAL_ACCOUNT_PHONE。
  */
 
 import { PrismaClient } from "@prisma/client"
@@ -87,10 +84,6 @@ async function main() {
       create: { userId: user.id, roleId: adminRole.id },
     })
     console.log(`✔ 已确保绑定角色「${adminRole.name}」`)
-
-    console.log(
-      `\n完成。提醒：/api/menus* 的访问由环境变量 INTERNAL_ACCOUNT_PHONE 控制（默认 18888888888），需与该手机号一致。`
-    )
   } finally {
     await prisma.$disconnect()
   }

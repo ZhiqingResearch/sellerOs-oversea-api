@@ -194,5 +194,4 @@ Jest + Mock `PrismaService`。通过 `Test.createTestingModule` 配置 `{ provid
   - `TOKENLAB_API_KEY`（TokenLab 中转，视频创作 Grok Imagine 档位；可选 `TOKENLAB_BASE_URL`）
   - `APIFY_API_TOKEN`（Apify 平台 API Token，灵感雷达模块抓取 Pinterest/Instagram/TikTok 内容；未配置时抓取接口返回空结果）
   - `API_BASE_URL`：公网可达的服务域名，用于拼曦灵 webhook 回调 URL；本地开发需通过 ngrok / cpolar 类工具转发
-  - `INTERNAL_ACCOUNT_PHONE`：内部账号手机号白名单（多个逗号分隔），仅这些账号可访问菜单/路由配置接口（`/api/menus*`，连超管也挡，见 `InternalAccountGuard`）；留空回退默认 `18888888888`
   - `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `MAIL_FROM`（邀请注册的邮箱验证码发送，见 `MailProvider`）；未配置时邮件发送接口返回 503，不影响其它功能启动

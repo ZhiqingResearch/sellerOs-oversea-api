@@ -25,7 +25,7 @@ import { MenuService } from "./menu.service"
 @ApiTags("菜单管理")
 @ApiBearerAuth()
 @Controller("menus")
-@UseGuards(JwtAuthGuard, InternalAccountGuard) // 仅内部账号（手机号），超管也挡
+@UseGuards(JwtAuthGuard, InternalAccountGuard)
 export class MenuController {
   constructor(
     private readonly menuService: MenuService,
