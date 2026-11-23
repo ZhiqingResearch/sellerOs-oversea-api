@@ -1,3 +1,4 @@
+import { normalizeForbiddenContent } from "../common/utils/forbidden-content"
 import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common"
 import { Prisma } from "@prisma/client"
 import { Decimal } from "@prisma/client/runtime/library"
@@ -68,6 +69,7 @@ export class AiSplitService {
     })
     if (existing?.groupId) return this.getTaskGroup({ groupId: existing.groupId }, userId, source)
 
+    const requestedForbiddenContent = normalizeForbiddenContent(dto.promptConfig.forbiddenContent)
     const projectSnapshot = await this.validator.buildProjectSnapshot(
       projectId,
       userId,
@@ -75,6 +77,8 @@ export class AiSplitService {
       productSnapshot,
       source
     )
+    const forbiddenContent = requestedForbiddenContent ??
+      normalizeForbiddenContent(projectSnapshot.forbiddenContent ?? undefined)
     const [analysisModel, references, imageModel] = await Promise.all([
       this.validator.loadAnalysisModel(),
       this.validator.resolveCompetitorReferences(dto.competitorReferences, projectId, userId),
@@ -124,6 +128,7 @@ export class AiSplitService {
               currentProductKeys: projectSnapshot.currentProductKeys,
               productImages: projectSnapshot.productImages,
               generationSettings: {
+                forbiddenContent,
                 site: dto.site,
                 locale: projectSnapshot.locale,
                 language: projectSnapshot.language,
@@ -256,9 +261,11 @@ export class AiSplitService {
       projectSnapshot: Awaited<ReturnType<AiSplitValidator["buildProjectSnapshot"]>>
       competitorTemplate: Record<string, unknown>
       imageModel: Awaited<ReturnType<AiSplitValidator["validateImageModel"]>>
+      forbiddenContent?: string
     }> = []
 
     for (const input of dto.items) {
+      const requestedForbiddenContent = normalizeForbiddenContent(input.promptConfig.forbiddenContent)
       const item = itemById.get(input.templateItemId)!
       if (
         item.promptVersion !== "v3" ||
@@ -287,7 +294,9 @@ export class AiSplitService {
         },
         projectSnapshot.productImages
       )
-      prepared.push({ input, item, projectSnapshot, competitorTemplate, imageModel })
+      const forbiddenContent = requestedForbiddenContent ??
+        normalizeForbiddenContent(projectSnapshot.forbiddenContent ?? undefined)
+      prepared.push({ input, item, projectSnapshot, competitorTemplate, imageModel, forbiddenContent })
     }
 
     // 固定一口价（组合价）预检（模板链路）：逐条目按其模型组合价 × 张数累加校验
@@ -322,7 +331,7 @@ export class AiSplitService {
         async tx => {
           const created = []
           for (let directionIndex = 0; directionIndex < prepared.length; directionIndex += 1) {
-            const { input, item, projectSnapshot, competitorTemplate, imageModel } =
+            const { input, item, projectSnapshot, competitorTemplate, imageModel, forbiddenContent } =
               prepared[directionIndex]
             const snapshot: AiSplitPromptSnapshot = {
               schemaVersion: "ai-split.v1",
@@ -339,6 +348,7 @@ export class AiSplitService {
               productImages: projectSnapshot.productImages,
               competitorTemplate,
               generationSettings: {
+                forbiddenContent,
                 site: input.site,
                 locale: projectSnapshot.locale,
                 language: projectSnapshot.language,
@@ -581,6 +591,7 @@ export class AiSplitService {
           retryOfTaskId: task.retryOfTaskId,
           directionIndex: task.directionIndex,
           reference: snapshot.reference,
+          forbiddenContent: snapshot.generationSettings.forbiddenContent ?? "",
           status: task.status,
           stage: task.aiSplitStage,
           errorMessage: task.errorMessage ? localizeErrorMessage(task.errorMessage) : task.errorMessage,

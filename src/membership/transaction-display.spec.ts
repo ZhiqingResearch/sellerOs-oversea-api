@@ -124,6 +124,29 @@ describe("describeTransaction", () => {
     expect(d.title).toBe("企业池调整")
   })
 
+  it("新版后台精确积分调整：按真实桶显示发放/扣减文案", () => {
+    const team = describeTransaction({
+      type: CreditTxnType.MANUAL_ADJUST,
+      source: "admin.team.adjust",
+      meta: { adminAdjustment: true, creditType: "PACKAGE" },
+      bucket: CreditBucket.PACKAGE,
+      direction: CreditDirection.DEBIT,
+      teamId: 10,
+    })
+    expect(team.category).toBe("手动调整")
+    expect(team.title).toBe("企业套餐积分扣减")
+
+    const personal = describeTransaction({
+      type: CreditTxnType.MANUAL_ADJUST,
+      source: "admin.subscription.adjust",
+      meta: { adminAdjustment: true, creditType: "GIFT" },
+      bucket: CreditBucket.GIFT,
+      direction: CreditDirection.CREDIT,
+    })
+    expect(personal.category).toBe("赠送")
+    expect(personal.title).toBe("后台赠送积分发放")
+  })
+
   it("企业归档积分清零（EXPIRE + source=team.archive）：项目=「企业归档积分清零」", () => {
     expect(
       describeTransaction({ type: CreditTxnType.EXPIRE, source: "team.archive", meta: null })

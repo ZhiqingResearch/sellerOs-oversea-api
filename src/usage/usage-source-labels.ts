@@ -131,6 +131,8 @@ const NON_CONSUME_SOURCE_OPTIONS: { value: string; label: string }[] = [
   // 非消费来源：后台个人订阅调整（客服补偿）——使用记录(DEBIT)侧为「后台积分扣减」；
   // source 是存量数据里的存储标识（不迁移），展示文案以流水 title 为准
   { value: "客服补偿赠送", label: "后台积分扣减" },
+  // 非消费来源：新版后台个人积分精确增减（RECHARGE/PACKAGE/GIFT）
+  { value: "admin.subscription.adjust", label: "个人积分调整" },
   // 非消费来源：个人转企业（packChoice=inject）个人充值积分整额注入企业共享池的转出行
   { value: "team.pack.inject", label: "个人充值积分转入企业共享池" },
   { value: "team.member.gift.transfer", label: "个人赠送积分转入企业共享池" },

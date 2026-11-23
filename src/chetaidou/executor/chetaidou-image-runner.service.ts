@@ -1,3 +1,5 @@
+import { recordGenerationSuccess } from "../../generation-record/generation-record-success"
+import { isQuotaResponse, isUpstreamQuotaError, quotaMessage, UPSTREAM_QUOTA_CODE } from "../../common/errors/upstream-quota"
 import { chetaidouImageJobStatus } from "../chetaidou.constants"
 // 车泰斗素材工作台 — 生图执行器（方案 §7.5）
 // 扫描 businessType=CHETAIDOU 的 ImageGenJob/Item；每张独立 Call：
@@ -271,6 +273,19 @@ export class ChetaidouImageRunnerService implements OnModuleInit {
             data: { providerJobId: gatewayTaskId },
           })
         } catch (error) {
+          if (isUpstreamQuotaError(error)) {
+            await this.prisma.$transaction(async tx => {
+              await tx.chetaidouCall.update({ where: { id: ctx.callId }, data: {
+                state: "FINISHED", outcome: "PROVIDER_FAILED", billingStatus: "FREE", errorCode: UPSTREAM_QUOTA_CODE,
+                errorMessage: quotaMessage("not_charged", "item"), finishedAt: new Date(),
+              } })
+              await tx.imageGenItem.update({ where: { id: ctx.itemId }, data: {
+                status: "FAILED", errorCode: UPSTREAM_QUOTA_CODE, errorMessage: quotaMessage("not_charged", "item"),
+              } })
+            })
+            await this.aggregateJob(ctx.job.id)
+            return
+          }
           await this.prisma.chetaidouCall.update({
             where: { id: ctx.callId },
             data: {
@@ -499,6 +514,8 @@ export class ChetaidouImageRunnerService implements OnModuleInit {
   ): Promise<void> {
     const usage = "usage" in task && task.usage ? task.usage : undefined
     const amount = usage?.amount ? toDecimal(usage.amount) : null
+    const quota = "error" in task && isQuotaResponse(task.error)
+    if (quota) message = quotaMessage("not_charged", "item")
     await this.prisma.$transaction(
       async tx => {
         await tx.$queryRaw`SELECT id FROM ChetaidouTask WHERE id = ${ctx.job.businessTaskId} FOR UPDATE`
@@ -522,7 +539,7 @@ export class ChetaidouImageRunnerService implements OnModuleInit {
           data: {
             state: "FINISHED",
             outcome: "PROVIDER_FAILED",
-            errorCode: "PROVIDER_ERROR",
+            errorCode: quota ? UPSTREAM_QUOTA_CODE : "PROVIDER_ERROR",
             errorMessage: message.slice(0, 1000),
             finishedAt: new Date(),
           },
@@ -531,7 +548,7 @@ export class ChetaidouImageRunnerService implements OnModuleInit {
           where: { id: ctx.itemId },
           data: {
             status: "FAILED",
-            errorCode: "PROVIDER_ERROR",
+            errorCode: quota ? UPSTREAM_QUOTA_CODE : "PROVIDER_ERROR",
             errorMessage: message.slice(0, 1000),
           },
         })
@@ -603,7 +620,7 @@ export class ChetaidouImageRunnerService implements OnModuleInit {
 
   /** 聚合 Job 状态（持 Job 行锁后读取全部当前 Item 状态再更新） */
   async aggregateJob(jobId: string): Promise<void> {
-    await this.prisma.$transaction(async tx => {
+    const status = await this.prisma.$transaction(async tx => {
       await tx.$queryRaw`SELECT id FROM ImageGenJob WHERE id = ${jobId} FOR UPDATE`
       const job = await tx.imageGenJob.findUnique({ where: { id: jobId } })
       if (!job || job.businessType !== CHETAIDOU_BUSINESS_TYPE) return
@@ -614,7 +631,9 @@ export class ChetaidouImageRunnerService implements OnModuleInit {
         data: { status },
         ...(status !== "RUNNING" ? {} : {}),
       })
+      return status
     })
+    if (status === "COMPLETED" || status === "PARTIAL") await recordGenerationSuccess(this.prisma, "imageGenJob", jobId)
   }
 
   private async openImageCall(

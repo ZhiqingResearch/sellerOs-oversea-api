@@ -66,6 +66,12 @@ export class AiSplitCompetitorReferenceDto {
 }
 
 export class AiSplitPromptConfigDto {
+  @ApiPropertyOptional({ description: "本次禁用词与内容，空串覆盖项目清单，未传使用项目值", maxLength: 20000 })
+  @ValidateIf((_, value) => value !== undefined)
+  @IsString({ message: "禁用词与内容必须是字符串" })
+  @MaxLength(20000, { message: "禁用词与内容不能超过 20000 个字符" })
+  forbiddenContent?: string
+
   @ApiProperty({
     name: "model_params",
     description: "与人像创作一致的 Gateway 模型动态参数",

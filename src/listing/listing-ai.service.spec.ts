@@ -1,3 +1,4 @@
+jest.mock("../generation-record/generation-record-success", () => ({ recordGenerationSuccess: jest.fn().mockResolvedValue(undefined) }))
 import { Decimal } from "@prisma/client/runtime/library"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
@@ -12,6 +13,13 @@ import { ListingRunService } from "./listing-run.service"
 const records = { beginStep: jest.fn().mockResolvedValue(null) } as unknown as ListingRunService
 
 describe("ListingAiService", () => {
+  it("历史优化仅预检优化5积分，自动评分不另加费用", async () => {
+    const assertFixedModuleAffordable = jest.fn().mockResolvedValue({ credits: 5 })
+    const service = new ListingAiService({} as AiGatewayProvider, { assertFixedModuleAffordable } as unknown as UsageService, records)
+    await expect(service.assertOptimizationAffordable(7)).resolves.toEqual({ credits: 5 })
+    expect(assertFixedModuleAffordable).toHaveBeenCalledTimes(1)
+    expect(assertFixedModuleAffordable).toHaveBeenCalledWith(7, "listing.generate", "optimization")
+  })
   describe.each(["json", "stream"] as const)("带runId的%s评分入口", mode => {
     it.each([false, true])("CDQ规则差异和缺少细则均正常交付 incomplete=%s", async isIncomplete => {
       const incident = JSON.parse(readFileSync(join(__dirname, "fixtures/listing-score-summary-28-20260917.json"), "utf8"))

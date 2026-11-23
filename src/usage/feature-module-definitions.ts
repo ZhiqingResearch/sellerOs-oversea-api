@@ -17,6 +17,13 @@ export interface FeatureModuleDefinition {
  */
 export const FEATURE_MODULE_DEFINITIONS: readonly FeatureModuleDefinition[] = [
   {
+    source: "patent.query",
+    label: "产品专利查询",
+    module: "selection",
+    moduleLabel: "市场前调",
+    sortOrder: 0,
+  },
+  {
     source: "category.analysis",
     label: "类目分析",
     module: "selection",

@@ -1,3 +1,4 @@
+import { isQuotaResponse, UpstreamQuotaError } from "../errors/upstream-quota"
 import {
   BadGatewayException,
   HttpException,
@@ -69,6 +70,7 @@ export interface AiGatewayJsonOptions<T> {
 }
 
 export interface AiGatewayStreamOptions {
+  onFinishReason?: (reason: string) => void
   /** 仅接受后端业务构造并校验过的多模态消息。 */
   userContent?: unknown
   modelConfigKey?: string
@@ -253,6 +255,7 @@ export class AiGatewayProvider {
 
       if (error instanceof GatewayApiError) {
         this._logSdkError(model, startedAt, error)
+        if (isQuotaResponse({ status: error.status, code: error.code, type: error.type, message: error.message })) throw new UpstreamQuotaError("ai-gateway", error.status === 429 ? 429 : [401, 403, 404].includes(error.status) ? 503 : 502)
         if (isDebugLoggingEnabled) {
           this.logger.debug(
             `AI Gateway SDK 错误响应\nurl=${requestUrl}\nstatus=${error.status}\nrequestId=${error.requestId ?? "-"}\nbody=${this._formatDebugValue(
@@ -373,6 +376,8 @@ export class AiGatewayProvider {
 
     try {
       for await (const chunk of gateway.chat.stream(requestBody)) {
+        const reason = this._extractFinishReason(chunk)
+        if (reason) options?.onFinishReason?.(reason)
         const reasoningContent = this._extractReasoningContent(chunk)
         if (reasoningContent) yield { type: "thinking", content: uiLanguage() === "en-US" && /\p{Script=Han}/u.test(reasoningContent) ? "Analyzing the request…" : reasoningContent }
 
@@ -402,6 +407,7 @@ export class AiGatewayProvider {
     } catch (error: unknown) {
       if (error instanceof GatewayApiError) {
         this._logSdkError(model, startedAt, error)
+        if (isQuotaResponse({ status: error.status, code: error.code, type: error.type, message: error.message })) throw new UpstreamQuotaError("ai-gateway", error.status === 429 ? 429 : [401, 403, 404].includes(error.status) ? 503 : 502)
         if (error.status === 429) throw new HttpException("AI Gateway 繁忙，请稍后重试", 429)
         if (error.status === 401 || error.status === 403) {
           throw new ServiceUnavailableException("AI Gateway 鉴权失败，请联系管理员")

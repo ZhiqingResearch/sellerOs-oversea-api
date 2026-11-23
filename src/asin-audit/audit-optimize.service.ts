@@ -1,6 +1,8 @@
+import { streamBeforeQuotaCharge } from "../common/errors/upstream-quota"
 import { Injectable, Logger } from "@nestjs/common"
 import { uiLanguage, uiText, withUiLanguage } from "../common/i18n/request-language"
 import { AiGatewayProvider } from "../common/providers/ai-gateway.provider"
+import { hashJson } from "../common/utils/canonical-json"
 import { AsinAuditBilling } from "./asin-audit.billing"
 import type { AsinAuditSseEvent } from "./asin-audit.types"
 import { asinAuditActionLabel } from "./asin-audit.types"
@@ -307,7 +309,7 @@ export function normalizeOptimizeResult(
   const fallbackTerms = fallbackSearchTerms(evidence)
 
   const searchTerms = cleanKeywordList(result.listing.searchTerms)
-  const keywordTiers = (result.keywordTiers ?? []).map(tier => ({
+  const keywordTiers = (evidence.D.group?.source === "xiyou" || evidence.D.group?.status === "partial" ? [] : result.keywordTiers ?? []).map(tier => ({
     ...tier,
     keywords: cleanKeywordList(tier.keywords),
   }))
@@ -341,17 +343,12 @@ export function normalizeOptimizeResult(
   }
 }
 
-/** 解析优化结果并在计费前校验商品文案；历史归档读取不经过此生成校验。 */
-export function finalizeOptimizeResult(
-  text: string,
-  evidence: AuditEvidence,
-  score: AuditScoreResult
-): AuditOptimizeResult {
+export function parseOptimizeResult(text: string): AuditOptimizeResult {
   const jsonStr = extractJson(text)
   if (!jsonStr) throw new Error("No JSON found in audit optimize response")
   const raw = parseLlmJson<Record<string, unknown>>(jsonStr)
 
-  const result: AuditOptimizeResult = {
+  return {
     listing: parseListing(raw.listing),
     imageSellingPoints: parseImageSellingPoints(raw.imageSellingPoints),
     aplusModules: parseAplusModules(raw.aplusModules),
@@ -362,7 +359,15 @@ export function finalizeOptimizeResult(
     fieldRewrites: parseFieldRewrites(raw.fieldRewrites),
     improvementPriorities: parseImprovementPriorities(raw.improvementPriorities),
   }
+}
 
+/** 解析优化结果并在计费前校验商品文案；历史归档读取不经过此生成校验。 */
+export function finalizeOptimizeResult(
+  text: string,
+  evidence: AuditEvidence,
+  score: AuditScoreResult
+): AuditOptimizeResult {
+  const result = parseOptimizeResult(text)
   if (!result.listing.title && result.listing.bullets.length === 0) {
     throw new Error(
       uiText(
@@ -437,12 +442,12 @@ export class AuditOptimizeService {
     const systemPrompt = `${buildAsinAuditOptimizeSkill(responseLanguage)}\n\n${modelResponseLanguageDirective(responseLanguage, true)}`
 
     let textBuffer = ""
-    for await (const event of this.gateway.streamChat(systemPrompt, userPrompt, {
+    for await (const event of streamBeforeQuotaCharge(this.gateway.streamChat(systemPrompt, userPrompt, {
       model: dto.model,
       temperature: 0.8,
       operationName: `ASIN 审计${asinAuditActionLabel("optimize")}`,
       resolveBilling: true,
-    })) {
+    }), "operation")) {
       if (event.type === "text") {
         textBuffer += event.content
         yield { type: "text", content: event.content }
@@ -461,9 +466,11 @@ export class AuditOptimizeService {
         const result = withUiLanguage(responseLanguage, () =>
           finalizeOptimizeResult(textBuffer, evidence, score)
         )
+        const resultHash = hashJson(JSON.parse(JSON.stringify(result)) as unknown)
         // 固定价模型走一口价 15，非固定模型回落按量
         const billed =
           (await this.billing.chargeFixedStage(userId, dto.model, "optimize", {
+            resultHash,
             ...(dto.clientRequestId ? { clientRequestId: dto.clientRequestId } : {}),
           })) ||
           (await this.billing.charge(
@@ -471,7 +478,8 @@ export class AuditOptimizeService {
             dto.model,
             "optimize",
             event.billing,
-            dto.clientRequestId
+            dto.clientRequestId,
+            { meta: { resultHash } }
           ))
         this.logger.log(
           `[asin-audit] optimize finalized userId=${userId} asin=${evidence.asin} title=${result.listing.title.slice(0, 40)}`

@@ -1,3 +1,4 @@
+import { UpstreamQuotaError } from "../common/errors/upstream-quota"
 import { BadRequestException } from "@nestjs/common"
 import { Decimal } from "@prisma/client/runtime/library"
 import { createHash } from "crypto"
@@ -293,6 +294,44 @@ describe("AiSplitTaskRunner", () => {
     expect(failTask).toHaveBeenCalledWith(31, "模型参数不支持")
   })
 
+  it.each(["QUEUED", "PRODUCT_PLANNING"])("%s 分析请求带独立约束且不把清单当商品事实", async stage => {
+    const { runner, prisma, gateway, task } = setup()
+    const staged = structuredClone(task)
+    staged.aiSplitStage = stage
+    staged.gatewayTaskId = null
+    staged.promptConfig.generationSettings.forbiddenContent = "- best seller"
+    prisma.generationTask.findUnique.mockResolvedValue(staged)
+    gateway.completeMultimodal = jest.fn().mockResolvedValue({ completion: { choices: [{ message: {} }] } })
+    const fail = jest.spyOn(runner as unknown as { failTask: () => Promise<void> }, "failTask").mockResolvedValue()
+    await runner.run(31)
+    expect(gateway.completeMultimodal).toHaveBeenCalledTimes(1)
+    const request = gateway.completeMultimodal.mock.calls[0][0]
+    expect(request.messages[0].content).toContain("- best seller")
+    expect(request.messages[0].content).toContain("创意保留要求冲突")
+    expect(JSON.stringify(request.messages[1])).not.toContain("best seller")
+    expect(fail).toHaveBeenCalled()
+  })
+
+  it.each([true, false])("最终出图独立追加清单，不经过负面词清洗（支持 negative_prompt=%s）", async supportsNegativePrompt => {
+    const { runner, prisma, gateway, task } = setup()
+    const staged = structuredClone(task)
+    staged.promptConfig.generationSettings.forbiddenContent = "- 工业管线\n- best seller"
+    staged.promptConfig.generationSettings.textAmount = "NONE"
+    staged.promptConfig.generationSettings.supportsNegativePrompt = supportsNegativePrompt
+    staged.promptConfig.competitorTemplate = {
+      element_classification: [{ ownership: "creative_owned", element: "工业管线" }],
+    }
+    staged.promptConfig.generationPlan!.negative_prompt = "禁止出现工业管线"
+    prisma.generationTask.findUnique.mockResolvedValue(staged)
+    await runner.run(31)
+    const request = gateway.createImageTask.mock.calls[0][0] as Record<string, unknown>
+    expect(request.prompt).toContain("- 工业管线\n- best seller")
+    expect(String(request.prompt).match(/【禁用词与内容约束】/g)).toHaveLength(1)
+    expect(request).not.toHaveProperty("forbiddenContent")
+    expect(staged.promptConfig.generationSettings.modelParams).not.toHaveProperty("forbiddenContent")
+    expect(request.negative_prompt).toBeUndefined()
+  })
+
   it("竞品拆解模型空返回：按产品口径失败（竞品图没有检测出可用产品），且不自动重试", async () => {
     const { runner, prisma, gateway, task } = setup()
     const staged = structuredClone(task)
@@ -347,13 +386,17 @@ describe("AiSplitTaskRunner", () => {
     expect(runner.getPromptVersions().productImageGenerationHash).not.toBe("product-hash")
   })
 
-  it("第2步 generation_settings 注入显式语言标签（site=AMAZON_MX → Spanish (es-MX)）", async () => {
+  it.each([undefined, "- 工业管线"])("第2步保留站点语言，并允许用户禁用参考图创意（%p）", async forbiddenContent => {
     const { runner, prisma, gateway, usage, task } = setup()
     const staged = structuredClone(task)
     staged.aiSplitStage = "PRODUCT_PLANNING"
     delete staged.promptConfig.generationPlan
     staged.promptConfig.generationSettings.site = "AMAZON_MX"
     staged.promptConfig.generationSettings.locale = "es-MX"
+    staged.promptConfig.generationSettings.forbiddenContent = forbiddenContent
+    staged.promptConfig.competitorTemplate = {
+      element_classification: [{ ownership: "creative_owned", element: "工业管线" }],
+    }
     // 三个阶段共享同一 promptConfig 引用：workflow2 会把 requestId/generationPlan
     // 写回快照，后续阶段（计费/提交）要读到这些运行期写入。
     const billingStage = structuredClone(staged)
@@ -369,7 +412,10 @@ describe("AiSplitTaskRunner", () => {
     gateway.completeMultimodal = jest.fn().mockResolvedValue({
       requestId: "req-w2",
       completion: {
-        choices: [{ message: { content: JSON.stringify(snapshot.generationPlan) } }],
+        choices: [{ message: { content: JSON.stringify({
+          ...snapshot.generationPlan,
+          negative_prompt: forbiddenContent ? "禁止出现工业管线" : "不要改变产品结构",
+        }) } }],
       },
     })
     gateway.getUsageByRequestId.mockResolvedValue({
@@ -390,6 +436,10 @@ describe("AiSplitTaskRunner", () => {
     const parsed = JSON.parse(userText) as { generation_settings: Record<string, unknown> }
     expect(parsed.generation_settings.language).toBe("Spanish (es-MX)")
     expect(parsed.generation_settings.site).toBe("AMAZON_MX")
+    expect(gateway.createImageTask).toHaveBeenCalledTimes(1)
+    if (forbiddenContent) {
+      expect(gateway.createImageTask.mock.calls[0][0].prompt).toContain(forbiddenContent)
+    }
   })
 
   it("终稿 prompt 头尾包站点语言硬指令（site=AMAZON_MX，textAmount=LOW）", async () => {
@@ -558,4 +608,15 @@ describe("AiSplitTaskRunner", () => {
       })
     )
   })
+  it("拆图生图提交可由恢复重入，额度失败不承诺历史图片调用未扣费", async () => {
+    const { runner, gateway, tx, usage } = setup()
+    Object.assign(tx, { imageProject: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) } })
+    gateway.createImageTask.mockRejectedValue(new UpstreamQuotaError("ai-gateway"))
+    await runner.run(31)
+    expect(tx.generatedImage.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: { status: "FAILED", errorMessage: "该项数据未获取" },
+    }))
+    expect(usage.chargeModel).not.toHaveBeenCalled()
+  })
+
 })

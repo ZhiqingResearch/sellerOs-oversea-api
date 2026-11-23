@@ -4,6 +4,7 @@ import { Test } from "@nestjs/testing"
 import { Decimal } from "@prisma/client/runtime/library"
 import { withUiLanguage } from "../common/i18n/request-language"
 import { AiGatewayProvider } from "../common/providers/ai-gateway.provider"
+import { hashJson } from "../common/utils/canonical-json"
 import { UsageService } from "../usage/usage.service"
 import { AsinAuditBilling } from "./asin-audit.billing"
 import { AuditOptimizeService } from "./audit-optimize.service"
@@ -300,7 +301,11 @@ describe("AsinAudit 服务（评分/优化/痛点 + 计费）", () => {
         source: "asin.audit",
         model: "ZQ-Think-Lite",
         requestId: "req-1",
-        meta: expect.objectContaining({ action: "score", promptVersion: PROMPT_VERSION }),
+        meta: expect.objectContaining({
+          action: "score",
+          promptVersion: PROMPT_VERSION,
+          resultHash: hashJson(JSON.parse(JSON.stringify(resultEvent.data)) as unknown),
+        }),
       })
     )
     // 打分按能力固定 temperature 0
@@ -771,6 +776,9 @@ describe("AsinAudit 服务（评分/优化/痛点 + 计费）", () => {
             pricingMode: "fixed",
             stage: "optimize",
             fixedCredits: 15,
+            resultHash: hashJson(
+              JSON.parse(JSON.stringify((events.at(-1) as { data: unknown }).data)) as unknown
+            ),
           }),
         })
       )

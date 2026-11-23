@@ -3,8 +3,19 @@ import { Decimal } from "@prisma/client/runtime/library"
 import { randomUUID } from "node:crypto"
 import { CREDIT_PER_CNY } from "../membership/membership.constants"
 import { UsageService } from "../usage/usage.service"
-import type { AsinAuditAction } from "./asin-audit.types"
+import {
+  ASIN_AUDIT_FIXED_CREDITS,
+  FIXED_CREDITS_MODEL,
+  type AsinAuditAction,
+  type AsinAuditFixedStage,
+} from "./asin-audit.types"
 import { PROMPT_VERSION } from "./prompts/prompt-assets"
+
+export {
+  ASIN_AUDIT_FIXED_CREDITS,
+  FIXED_CREDITS_MODEL,
+  type AsinAuditFixedStage,
+} from "./asin-audit.types"
 
 /**
  * ASIN 审计共享计费（三个能力共用）：网关真实 CNY 账单 × 库表倍率 → chargeModel v2。
@@ -106,23 +117,11 @@ export class AsinAuditBilling {
   }
 }
 
-/** 固定一口价模型：Gemini 3.8 Flash 及旧 ZQ-Think-Flash；其余模型保持按量计费 */
-export const FIXED_CREDITS_MODEL = "ZQ-Multimodal-Gemini-3.8-Flash"
-
 /**
  * 取证模块（scene=evidence-module）专用扣费 source：与审计打分/优化区分统计展示
  * （FeatureModule 注册表 label「ASIN 取证」）。按量回落路径同样使用。
  */
 export const ASIN_EVIDENCE_SOURCE = "asin.audit.evidence"
-
-export type AsinAuditFixedStage = "evidence" | "score" | "optimize"
-
-/** 各阶段固定积分（成功后扣）：审计链（scene=audit）取证不扣，由打分 20 覆盖 */
-export const ASIN_AUDIT_FIXED_CREDITS: Record<AsinAuditFixedStage, number> = {
-  evidence: 5,
-  score: 20,
-  optimize: 15,
-}
 
 export function isAsinAuditFixedModel(model: string): boolean {
   return model === FIXED_CREDITS_MODEL || model === "ZQ-Think-Flash"

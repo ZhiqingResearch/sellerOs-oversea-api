@@ -82,6 +82,7 @@ export class ImageToImageController {
       traceId: result.traceId,
       total: result.total,
       items: result.items,
+      ...(result.projectId !== undefined ? { projectId: result.projectId } : {}),
       ...(result.localRedraw ? { localRedraw: result.localRedraw } : {}),
     });
   }

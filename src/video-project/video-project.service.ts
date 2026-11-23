@@ -1,3 +1,4 @@
+import { isUpstreamQuotaError, quotaFailure, quotaTaskMessage } from "../common/errors/upstream-quota"
 import {
   BadRequestException,
   ForbiddenException,
@@ -247,19 +248,19 @@ export class VideoProjectService implements OnModuleInit {
       this.logger.error(
         `[VideoTask] Gateway 提交失败 task=${task.id}: ${error instanceof Error ? error.message : String(error)}`
       )
-      // 仅网关明确拒绝（400/404 参数不合法/模型下架）才终态化并抛给用户；
-      // 429/401/403/5xx/超时视为瞬态或结果不确定，保留 GENERATING 等启动恢复按幂等键重提
-      if (!(error instanceof BadRequestException)) {
+      // 仅网关明确拒绝（参数不合法/模型下架/明确额度耗尽）才终态化并抛给用户；
+      // 普通 429/401/403/5xx/超时视为瞬态或结果不确定，保留 GENERATING 等启动恢复按幂等键重提
+      if (!(error instanceof BadRequestException) && !isUpstreamQuotaError(error)) {
         return (await this.publicTasks([task]))[0]
       }
       await this.prisma.videoTask.updateMany({
         where: { id: task.id, status: "GENERATING", deletedAt: null },
         data: {
           status: "FAILED",
-          errorMessage: "AI Gateway 视频任务提交失败",
+          errorMessage: quotaTaskMessage(error, "not_charged", "AI Gateway 视频任务提交失败", "item"),
         },
       })
-      throw error
+      throw quotaFailure(error, "not_charged", "item")
     }
 
     const updated = await this.prisma.videoTask.update({
@@ -643,16 +644,16 @@ export class VideoProjectService implements OnModuleInit {
       this.logger.error(
         `[动作复刻] Gateway 提交失败 task=${task.id}: ${error instanceof Error ? error.message : String(error)}`
       )
-      // 仅网关明确拒绝（400/404 参数不合法/模型下架）才终态化：单条标记失败，其余批次任务继续提交；
-      // 429/401/403/5xx/超时视为瞬态或结果不确定，保留 GENERATING 等启动对账按幂等键重提
-      if (!(error instanceof BadRequestException)) {
+      // 仅网关明确拒绝（参数不合法/模型下架/明确额度耗尽）才终态化：单条标记失败，其余批次任务继续提交；
+      // 普通 429/401/403/5xx/超时视为瞬态或结果不确定，保留 GENERATING 等启动对账按幂等键重提
+      if (!(error instanceof BadRequestException) && !isUpstreamQuotaError(error)) {
         return task
       }
       await this.prisma.videoTask.updateMany({
         where: { id: task.id, status: "GENERATING", deletedAt: null },
-        data: { status: "FAILED", errorMessage: "AI Gateway 视频任务提交失败" },
+        data: { status: "FAILED", errorMessage: quotaTaskMessage(error, "not_charged", "AI Gateway 视频任务提交失败", "item") },
       })
-      return { ...task, status: "FAILED", errorMessage: "AI Gateway 视频任务提交失败" }
+      return { ...task, status: "FAILED", errorMessage: quotaTaskMessage(error, "not_charged", "AI Gateway 视频任务提交失败", "item") }
     }
   }
 

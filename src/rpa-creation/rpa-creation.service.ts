@@ -1,3 +1,4 @@
+import { recordGenerationSuccess } from "../generation-record/generation-record-success"
 import sharp from "sharp"
 import { modelDisplayNames, jsonObject } from "../common/utils/generation-metadata"
 import {
@@ -690,7 +691,7 @@ export class RpaCreationService implements OnModuleInit {
       }
 
       const now = new Date()
-      return tx.rpaCreationTask.update({
+      const completed = await tx.rpaCreationTask.update({
         where: { id: current.id },
         data: {
           status: "SUCCESS",
@@ -703,7 +704,9 @@ export class RpaCreationService implements OnModuleInit {
         },
         include: { outputs: ACTIVE_OUTPUTS_QUERY },
       })
+      return completed
     })
+    if (result.status === "SUCCESS") await recordGenerationSuccess(this.prisma, "rpaCreationTask", result.id)
     return this.toPublicTask(result)
   }
 

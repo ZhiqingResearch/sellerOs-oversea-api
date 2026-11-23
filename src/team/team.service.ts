@@ -28,7 +28,7 @@ import { DAY_MS } from "../membership/membership.constants"
 import { PrismaService } from "../prisma/prisma.service"
 import { collectAuditUserIds, describeAuditLog } from "./audit-description"
 import { AdjustTeamDto, CreateCustomTeamDto, QueryTeamsDto, UpdateTeamDto } from "./dto/admin.dto"
-import { AddMemberDto, UpdateSettingsDto } from "./dto/console.dto"
+import { AddMemberDto, QueryMembersDto, UpdateSettingsDto } from "./dto/console.dto"
 import { TeamPoolService } from "./team-pool.service"
 import {
   SYSTEM_ACTOR_ID,
@@ -271,7 +271,7 @@ export class TeamService {
   }
 
   /** 成员管理 Tab：成员列表（含配额口径，读时懒重置；归档团队跳过重置，历史用量原样保留） */
-  async listMembers(teamId: number) {
+  async listMembers(teamId: number, query: QueryMembersDto = {}) {
     await this.prisma.teamMember.updateMany({
       where: {
         teamId,
@@ -288,7 +288,37 @@ export class TeamService {
         orderBy: { joinedAt: "asc" },
       }),
     ])
-    return members.map(m => ({
+    const keyword = query.keyword?.trim().toLowerCase()
+    const filtered = members.filter(m => {
+      if (
+        keyword &&
+        ![m.user.username, m.user.phone, m.user.email].some(value =>
+          value?.toLowerCase().includes(keyword)
+        )
+      )
+        return false
+      if (query.role && m.role !== query.role) return false
+      if (query.status && m.status !== query.status) return false
+
+      const used = new Decimal(m.quotaUsedThisMonth)
+      if (query.usageStatus === "USED" && !used.greaterThan(0)) return false
+      if (query.usageStatus === "UNUSED" && !used.isZero()) return false
+      if (query.quotaStatus) {
+        if (query.quotaStatus === "UNLIMITED") return m.monthlyQuota == null
+        if (m.monthlyQuota == null) return false
+        const nearLimit = new Decimal(m.monthlyQuota).mul(0.9)
+        switch (query.quotaStatus) {
+          case "SUFFICIENT":
+            return used.lessThan(nearLimit)
+          case "NEAR_LIMIT":
+            return used.greaterThanOrEqualTo(nearLimit) && used.lessThan(m.monthlyQuota)
+          case "EXHAUSTED":
+            return used.greaterThanOrEqualTo(m.monthlyQuota)
+        }
+      }
+      return true
+    })
+    return filtered.map(m => ({
       userId: m.userId,
       username: m.user.username,
       phone: m.user.phone,
@@ -1063,31 +1093,42 @@ export class TeamService {
   }
 
   /**
-   * 平台调整（客服补偿）：赠送池充值积分（正负皆可，负向减少量不得超过剩余）/ 延长有效期。
-   * 宽限期内延长到未来 → 自动回 ACTIVE（等效恢复）。
+   * 平台调整企业共享池：RECHARGE/PACKAGE/GIFT 精确增减，并可单独/同时延长有效期。
+   * 旧 rechargeCreditsDelta 保留为 RECHARGE 兼容字段。扣减积分不允许同时延长有效期。
    */
   async adjustTeam(teamId: number, actorId: number, dto: AdjustTeamDto) {
-    if (dto.rechargeCreditsDelta == null && dto.extendDays == null) {
+    const hasNewCreditAdjustment = dto.creditType != null || dto.creditsDelta != null
+    const hasLegacyRechargeAdjustment = dto.rechargeCreditsDelta != null
+    if (hasNewCreditAdjustment && hasLegacyRechargeAdjustment) {
+      throw new BadRequestException("creditType/creditsDelta 与 rechargeCreditsDelta 不能同时使用")
+    }
+    if (!hasNewCreditAdjustment && !hasLegacyRechargeAdjustment && dto.extendDays == null) {
       throw new BadRequestException("没有需要调整的内容")
     }
+    if (hasNewCreditAdjustment) {
+      if (dto.creditType == null || dto.creditsDelta == null) {
+        throw new BadRequestException("creditType 与 creditsDelta 必须同时传入")
+      }
+      if (dto.creditsDelta === 0) throw new BadRequestException("调整积分不能为 0")
+    }
     if (dto.rechargeCreditsDelta === 0) throw new BadRequestException("调整积分不能为 0")
+    const deducting = hasNewCreditAdjustment
+      ? dto.creditsDelta! < 0
+      : (dto.rechargeCreditsDelta ?? 0) < 0
+    if (hasNewCreditAdjustment && deducting && dto.extendDays != null) {
+      throw new BadRequestException("扣减积分时不允许延长有效期")
+    }
     const team = await this.prisma.team.findUnique({ where: { id: teamId } })
     if (!team) throw new NotFoundException("团队不存在")
+    if (hasNewCreditAdjustment && team.status === TeamStatus.ARCHIVED) {
+      throw new BadRequestException("已归档团队不可调整")
+    }
 
     await this.prisma.$transaction(async tx => {
-      if (dto.rechargeCreditsDelta != null) {
-        await this.pool.adjustPoolRecharge(
-          teamId,
-          team.adminId,
-          dto.rechargeCreditsDelta,
-          {
-            source: "admin.team.adjust",
-          },
-          tx
-        )
-      }
+      let newExpiresAt: Date | null = null
       if (dto.extendDays != null) {
-        const newExpiresAt = new Date(team.expiresAt.getTime() + dto.extendDays * DAY_MS)
+        const base = hasNewCreditAdjustment && team.expiresAt < new Date() ? new Date() : team.expiresAt
+        newExpiresAt = new Date(base.getTime() + dto.extendDays * DAY_MS)
         const backToActive = team.status === TeamStatus.GRACE && newExpiresAt.getTime() > Date.now()
         await tx.team.update({
           where: { id: teamId },
@@ -1098,14 +1139,59 @@ export class TeamService {
             ...(backToActive ? { status: TeamStatus.ACTIVE } : {}),
           },
         })
+        if (hasNewCreditAdjustment) await tx.creditLot.updateMany({
+          where: {
+            teamId,
+            sourceType: CreditTxnType.RECHARGE_PLAN,
+            bucket: { in: [CreditBucket.PACKAGE, CreditBucket.GIFT] },
+            status: CreditLotStatus.ACTIVE,
+            remaining: { gt: 0 },
+            expiresAt: { gt: new Date(), lt: newExpiresAt },
+          },
+          data: { expiresAt: newExpiresAt },
+        })
       }
-      await this.audit(tx, teamId, actorId, TeamAuditAction.TEAM_ADJUST, {
+
+      const auditMeta = {
+        creditType: dto.creditType ?? null,
+        creditsDelta: dto.creditsDelta ?? null,
         rechargeCreditsDelta: dto.rechargeCreditsDelta ?? null,
         extendDays: dto.extendDays ?? null,
-      })
+        reason: dto.reason ?? null,
+        operatorId: actorId,
+      }
+      if (hasNewCreditAdjustment) {
+        await this.credit.adjustCreditsByBucket(
+          team.adminId,
+          dto.creditType!,
+          dto.creditsDelta!,
+          {
+            teamId,
+            expiresAt:
+              dto.creditType === CreditBucket.RECHARGE || dto.extendDays == null
+                ? null
+                : newExpiresAt,
+            source: "admin.team.adjust",
+            meta: auditMeta,
+          },
+          tx
+        )
+      } else if (dto.rechargeCreditsDelta != null) {
+        await this.pool.adjustPoolRecharge(
+          teamId,
+          team.adminId,
+          dto.rechargeCreditsDelta,
+          {
+            source: "admin.team.adjust",
+            meta: auditMeta,
+          },
+          tx
+        )
+      }
+      await this.audit(tx, teamId, actorId, TeamAuditAction.TEAM_ADJUST, auditMeta)
     })
     this.logger.log(
-      `adjustTeam team=${teamId} delta=${dto.rechargeCreditsDelta ?? "-"} extend=${dto.extendDays ?? "-"}`
+      `adjustTeam team=${teamId} type=${dto.creditType ?? "RECHARGE(legacy)"} delta=${dto.creditsDelta ?? dto.rechargeCreditsDelta ?? "-"} extend=${dto.extendDays ?? "-"}`
     )
     return this.getAdminTeamDetail(teamId)
   }

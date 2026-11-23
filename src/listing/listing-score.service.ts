@@ -1,3 +1,5 @@
+import { recordGenerationSuccess } from "../generation-record/generation-record-success"
+import { streamBeforeQuotaCharge } from "../common/errors/upstream-quota"
 import {
   BadGatewayException,
   ConflictException,
@@ -144,7 +146,7 @@ export class ListingScoreService {
           if (dto.images?.length && dto.model === "ZQ-Think-Lite")
             throw new BadGatewayException("ZQ-Think-Lite 不支持图片评分，请选择 Flash 或 Pro")
           const userContent = await prepareListingScoreImages(dto.userPrompt, dto.images)
-          for await (const event of this.gateway.streamChat(
+          for await (const event of streamBeforeQuotaCharge(this.gateway.streamChat(
             buildListingImageSystemPrompt(
               buildListingScoreSystemPrompt(dto.systemPrompt, dto.userPrompt),
               dto.images
@@ -159,7 +161,7 @@ export class ListingScoreService {
               resolveBilling: true,
               operationName: "Listing score",
             }
-          )) {
+          ), "step")) {
             if (event.type === "text") outputText += event.content
             else if (event.type === "billing") primary.billing = event.billing
             else if (event.type === "usage") primary.usage = event.usage
@@ -341,7 +343,7 @@ export class ListingScoreService {
           const repairUserContent = correctionPlan
             ? repairImageContent?.map((part, index) => index === 0 ? { type: "text" as const, text: repairUserPrompt } : part)
             : undefined
-          for await (const event of this.gateway.streamChat(
+          for await (const event of streamBeforeQuotaCharge(this.gateway.streamChat(
             correctionPlan
               ? buildListingImageSystemPrompt(
                   correctionRequest!.systemPrompt,
@@ -362,7 +364,7 @@ export class ListingScoreService {
               resolveBilling: true,
               operationName: "Listing score repair",
             }
-          )) {
+          ), "step")) {
             if (event.type === "text") repairText += event.content
             else if (event.type === "billing") repair.billing = event.billing
             else if (event.type === "usage") repair.usage = event.usage
@@ -483,7 +485,7 @@ export class ListingScoreService {
     if (!billing?.requestId || !snapshot.resultText)
       throw new BadGatewayException("评分结算证据不完整")
     snapshot.resultText = prepareListingScoreDelivery(snapshot.resultText, undefined, { sourceFacts: snapshot.sourceFacts }) ?? snapshot.resultText
-    await this.prisma.$transaction(
+    const settlement = await this.prisma.$transaction(
       async tx => {
         // 先原子认领，避免两次重连同时扣费；结算失败时认领随事务回滚。
         const claimed = await tx.businessAiRun.updateMany({
@@ -504,12 +506,13 @@ export class ListingScoreService {
         )
         const usage = await tx.usageLog.findUnique({
           where: { requestId: billing.requestId },
-          select: { id: true },
+          select: { id: true, credits: true },
         })
         await tx.businessAiRun.update({
           where: { id: run.id },
           data: { usageLogId: usage?.id ?? null, error: null },
         })
+        return usage
       },
       {
         maxWait: 10_000,
@@ -517,6 +520,10 @@ export class ListingScoreService {
         isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
       }
     )
+    await recordGenerationSuccess(this.prisma, "businessAiRun", run.id, {
+      modelPublicId: billing.model,
+      credits: settlement?.credits ?? undefined,
+    })
     return this.prisma.businessAiRun.findUniqueOrThrow({ where: { id: run.id } })
   }
 }

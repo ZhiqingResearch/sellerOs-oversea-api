@@ -17,6 +17,10 @@ describe("workbenchOutputQueries", () => {
 
   beforeEach(() => {
     prisma = {
+      patentQueryTask: {
+        count: jest.fn().mockResolvedValue(0),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       asinEvidenceRecord: {
         count: jest.fn().mockResolvedValue(0),
         findMany: jest.fn().mockResolvedValue([]),
@@ -77,8 +81,33 @@ describe("workbenchOutputQueries", () => {
     }
   })
 
-  it("共注册 20 个功能查询", () => {
-    expect(workbenchOutputQueries(prisma as unknown as PrismaService)).toHaveLength(20)
+  it("共注册 21 个功能查询", () => {
+    expect(workbenchOutputQueries(prisma as unknown as PrismaService)).toHaveLength(21)
+  })
+
+  it("产品专利查询仅计已结算且未删除报告，标题来自输入", async () => {
+    const q = queryOf(WorkbenchFeatureKey.PATENT_QUERY)
+    prisma.patentQueryTask.findMany.mockResolvedValue([
+      { id: 7, input: { images: [], design: { productName: "保温杯" } }, createdAt: since },
+    ])
+    await q.count(9, since)
+    expect(prisma.patentQueryTask.count).toHaveBeenCalledWith({
+      where: {
+        userId: 9,
+        deletedAt: null,
+        status: { in: ["COMPLETED", "PARTIAL"] },
+        createdAt: { gte: since },
+      },
+    })
+    expect(await q.latest(9, since, 3)).toEqual([
+      {
+        featureKey: "patent_query",
+        featureLabel: "产品专利查询",
+        recordId: "7",
+        title: "保温杯",
+        occurredAt: since,
+      },
+    ])
   })
 
   it("按请求语言返回功能名，保留历史记录里的商品名", async () => {

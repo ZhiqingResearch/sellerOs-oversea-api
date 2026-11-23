@@ -51,16 +51,19 @@ export class AsinAuditEvidenceController {
     response.setHeader("Cache-Control", "no-cache, no-transform")
     response.setHeader("Connection", "keep-alive")
     response.flushHeaders()
+    const abort = new AbortController()
+    const close = () => { if (!response.writableEnded) abort.abort() }
+    response.on("close", close)
     const heartbeatTimer = setInterval(() => {
-      if (!response.writableEnded) response.write(": heartbeat\n\n")
+      if (!response.writableEnded && !response.destroyed) response.write(": heartbeat\n\n")
     }, SSE_HEARTBEAT_INTERVAL_MS)
     heartbeatTimer.unref()
 
     try {
       await this.evidenceService.run(dto, resolved, request.user.id, ev =>
-        this._writeSse(response, ev)
+        this._writeSse(response, ev), abort.signal
       )
-      response.write("data: [DONE]\n\n")
+      if (!response.destroyed) response.write("data: [DONE]\n\n")
     } catch (error: unknown) {
       const { message, code } = this.evidenceService.toErrorEvent(error)
       this._writeSse(response, {
@@ -71,6 +74,7 @@ export class AsinAuditEvidenceController {
       })
     } finally {
       clearInterval(heartbeatTimer)
+      response.off("close", close)
       response.end()
     }
   }
@@ -96,6 +100,7 @@ export class AsinAuditEvidenceController {
   }
 
   private _writeSse(response: Response, event: object): void {
+    if (response.writableEnded || response.destroyed) return
     response.write(`data: ${JSON.stringify(event)}\n\n`)
   }
 }

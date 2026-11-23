@@ -29,7 +29,12 @@ describe("AdminSubscriptionService", () => {
     creditLot: { update: jest.Mock; groupBy: jest.Mock }
     creditTransaction: { create: jest.Mock }
   }
-  let credit: { grant: jest.Mock; consumableBalance: jest.Mock }
+  let credit: {
+    grant: jest.Mock
+    consumableBalance: jest.Mock
+    extendPlanLotExpiryInTx: jest.Mock
+    adjustCreditsByBucket: jest.Mock
+  }
 
   const futureRow = (id: number, daysFromNow: number) => ({
     id,
@@ -59,6 +64,11 @@ describe("AdminSubscriptionService", () => {
       grant: jest.fn(),
       consumableBalance: jest.fn().mockResolvedValue(new Decimal(850)),
       extendPlanLotExpiryInTx: jest.fn(), // 调整到期日同步顺延套餐批次（bug22）
+      adjustCreditsByBucket: jest.fn().mockResolvedValue({
+        creditsDelta: new Decimal(0),
+        bucketBalanceAfter: new Decimal(0),
+        totalBalanceAfter: new Decimal(0),
+      }),
     }
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -106,12 +116,16 @@ describe("AdminSubscriptionService", () => {
       prisma.user.findMany.mockResolvedValue([futureRow(1, 10), futureRow(2, 3)])
       prisma.user.count.mockResolvedValue(2)
       prisma.creditLot.groupBy.mockResolvedValue([
-        { userId: 1, _sum: { remaining: new Decimal(1250) } },
+        { userId: 1, bucket: CreditBucket.RECHARGE, _sum: { remaining: new Decimal(1000) } },
+        { userId: 1, bucket: CreditBucket.PACKAGE, _sum: { remaining: new Decimal(250) } },
       ])
 
       const res = await service.list({ page: 1, pageSize: 10 })
 
       expect(res.items[0].points).toBe("1250")
+      expect(res.items[0].rechargePoints).toBe("1000")
+      expect(res.items[0].packagePoints).toBe("250")
+      expect(res.items[0].giftPoints).toBe("0")
       expect(res.items[1].points).toBe("0") // 无批次 → 0
       const [args] = callArgs<[{ where: { bucket: unknown; userId: unknown } }]>(
         prisma.creditLot.groupBy,
@@ -119,6 +133,7 @@ describe("AdminSubscriptionService", () => {
       )
       expect(args.where.userId).toEqual({ in: [1, 2] })
       expect(args.where.bucket).toEqual({ in: ["RECHARGE", "PACKAGE", "GIFT"] })
+      expect((args.where as { teamId?: null }).teamId).toBeNull()
     })
 
     it("status=EXPIRING 的 where 窗口 = (now, now+7d]", async () => {
@@ -363,11 +378,14 @@ describe("AdminSubscriptionService", () => {
         operatorId: 99,
       })
       expect(tx).toBe(prisma) // 复用外层事务
-      expect(res).toEqual({
+      expect(res).toMatchObject({
         userId: 7,
+        creditType: null,
+        creditsDelta: null,
         giftCredits: 500,
         extendDays: null,
         subscriptionExpiresAt: null,
+        buckets: { recharge: "0", package: "0", gift: "0", total: "0" },
       })
     })
 
@@ -465,6 +483,67 @@ describe("AdminSubscriptionService", () => {
       expect(credit.grant).toHaveBeenCalledTimes(1)
       expect(prisma.user.update).toHaveBeenCalledTimes(1)
       expect(prisma.creditTransaction.create).not.toHaveBeenCalled()
+    })
+
+    it("新字段：增加 PACKAGE 并延长有效期，按新到期日发放并写精确桶流水", async () => {
+      const base = new Date(Date.now() + 10 * DAY_MS)
+      mockUser(base)
+
+      await service.adjust(7, 99, {
+        creditType: CreditBucket.PACKAGE,
+        creditsDelta: 500,
+        extendDays: 30,
+        reason: "补偿套餐积分",
+      })
+
+      const expectedExpiry = new Date(base.getTime() + 30 * DAY_MS)
+      const [, bucket, delta, opts, tx] = callArgs<
+        [
+          number,
+          CreditBucket,
+          number,
+          { expiresAt: Date | null; source: string; meta: Record<string, unknown> },
+          unknown,
+        ]
+      >(credit.adjustCreditsByBucket, 0)
+      expect([bucket, delta]).toEqual([CreditBucket.PACKAGE, 500])
+      expect(opts.expiresAt).toEqual(expectedExpiry)
+      expect(opts.source).toBe("admin.subscription.adjust")
+      expect(opts.meta).toMatchObject({
+        adminAdjustment: true,
+        compensation: true,
+        creditType: CreditBucket.PACKAGE,
+        creditsDelta: 500,
+        extendDays: 30,
+        reason: "补偿套餐积分",
+        operatorId: 99,
+      })
+      expect(tx).toBe(prisma)
+      expect(credit.extendPlanLotExpiryInTx).toHaveBeenCalledWith(prisma, 7, expectedExpiry)
+    })
+
+    it("新字段：扣减 GIFT 时精确调用 GIFT 桶，且不允许同时延长有效期", async () => {
+      mockUser()
+
+      await service.adjust(7, 99, {
+        creditType: CreditBucket.GIFT,
+        creditsDelta: -100,
+        reason: "后台扣减",
+      })
+      const [, bucket, delta, opts] = callArgs<
+        [number, CreditBucket, number, { expiresAt: Date | null; meta: Record<string, unknown> }]
+      >(credit.adjustCreditsByBucket, 0)
+      expect([bucket, delta]).toEqual([CreditBucket.GIFT, -100])
+      expect(opts.expiresAt).toBeNull()
+      expect(opts.meta).toMatchObject({ adminAdjustment: true, compensation: false })
+
+      await expect(
+        service.adjust(7, 99, {
+          creditType: CreditBucket.GIFT,
+          creditsDelta: -100,
+          extendDays: 30,
+        })
+      ).rejects.toThrow("扣减积分时不允许延长有效期")
     })
   })
 })

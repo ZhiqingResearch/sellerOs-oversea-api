@@ -1,3 +1,5 @@
+jest.mock("../../generation-record/generation-record-success", () => ({ recordGenerationSuccess: jest.fn().mockResolvedValue(undefined) }))
+import { UpstreamQuotaError, UPSTREAM_QUOTA_CODE } from "../../common/errors/upstream-quota"
 import { Test } from "@nestjs/testing"
 import { Prisma } from "@prisma/client"
 import { AiGatewayProvider } from "../../ai-gateway/ai-gateway.provider"
@@ -10,6 +12,24 @@ import { ChetaidouReconciliationService } from "./chetaidou-reconciliation.servi
 import { ChetaidouTaskRunnerService } from "./chetaidou-task-runner.service"
 
 describe("车泰斗调度不设置额外的 4/2 并发上限", () => {
+  it("文本额度拒绝记当前 Call 免费终态，不进入待核对或实际扣费", async () => {
+    const update = jest.fn()
+    const db = { chetaidouCall: {
+      findUnique: jest.fn().mockResolvedValue({ state: "PREPARED" }),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }), update,
+    } }
+    const moduleRef = await Test.createTestingModule({ providers: [ChetaidouTaskRunnerService,
+      { provide: PrismaService, useValue: db },
+      { provide: AiGatewayProvider, useValue: { completeMultimodal: jest.fn().mockRejectedValue(new UpstreamQuotaError("test")) } },
+      { provide: ChetaidouBillingService, useValue: {} }, { provide: ChetaidouStorageService, useValue: {} },
+    ] }).compile()
+    const service = moduleRef.get(ChetaidouTaskRunnerService)
+    await expect(service["callLlm"]("call-quota", { model: "test", messages: [] })).rejects.toThrow("该步骤数据未获取，未扣除积分")
+    expect(update).toHaveBeenCalledWith({ where: { id: "call-quota" }, data: expect.objectContaining({
+      state: "FINISHED", outcome: "PROVIDER_FAILED", billingStatus: "FREE", errorCode: UPSTREAM_QUOTA_CODE,
+    }) })
+  })
+
   it("五个独立文本调用可同时发出，仍逐次 CAS 认领", async () => {
     let complete!: () => void
     const pending = new Promise<void>(resolve => {

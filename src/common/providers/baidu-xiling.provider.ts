@@ -1,3 +1,4 @@
+import { isQuotaResponse, UpstreamQuotaError } from "../errors/upstream-quota"
 import { BadRequestException, Injectable, Logger } from "@nestjs/common"
 import { ConfigService } from "@nestjs/config"
 import axios from "axios"
@@ -112,6 +113,7 @@ export class BaiduXilingProvider {
       },
     })
 
+    if (data.code !== 0 && isQuotaResponse({ message: data.message.global })) throw new UpstreamQuotaError("xiling")
     if (data.code !== 0) throw new BadRequestException(`上传文件失败: ${data.message.global}`)
     return data.result.fileId
   }
@@ -142,6 +144,7 @@ export class BaiduXilingProvider {
       { headers: { Authorization: this.generateAuth().authorization } }
     )
 
+    if (data.code !== 0 && isQuotaResponse({ message: data.message.global })) throw new UpstreamQuotaError("xiling")
     if (data.code !== 0) throw new BadRequestException(`创建数字人失败: ${data.message.global}`)
     this.logger.log(`数字人训练已提交 [figureId: ${data.result.figureId}]`)
     return data.result.figureId
@@ -171,6 +174,7 @@ export class BaiduXilingProvider {
       params: { figureId },
     })
 
+    if (data.code !== 0 && isQuotaResponse({ message: data.message.global })) throw new UpstreamQuotaError("xiling")
     if (data.code !== 0) throw new Error(`查询数字人失败: ${data.message.global}`)
     const result = data.result.result[0]
     if (!result) throw new Error(`未找到 figureId=${figureId} 的数字人`)
@@ -192,6 +196,7 @@ export class BaiduXilingProvider {
         params: { systemFigure: true, item, pageNo, pageSize },
       })
 
+      if (data.code !== 0 && isQuotaResponse({ message: data.message.global })) throw new UpstreamQuotaError("xiling")
       if (data.code !== 0) throw new Error(`查询公共人像失败: ${data.message.global}`)
       const batch = data.result.result ?? []
       const found = batch.find(f => f.figureId === figureId)
@@ -238,6 +243,7 @@ export class BaiduXilingProvider {
       { headers: { Authorization: this.generateAuth().authorization } }
     )
 
+    if (data.code !== 0 && isQuotaResponse({ message: data.message.global })) throw new UpstreamQuotaError("xiling")
     if (data.code !== 0) throw new BadRequestException(`声音克隆失败: ${data.message.global}`)
     this.logger.log(`声音克隆已提交 [perId: ${data.result.perId}]`)
     return data.result.perId
@@ -304,6 +310,7 @@ export class BaiduXilingProvider {
       params: { perId, isSuccess },
     })
 
+    if (data.code !== 0 && isQuotaResponse({ message: data.message.global })) throw new UpstreamQuotaError("xiling")
     if (data.code !== 0) throw new Error(`查询声音克隆失败: ${data.message.global}`)
     const result = data.result[0]
     if (!result) throw new Error(`未找到 perId=${perId} 的声音克隆任务`)
@@ -354,6 +361,7 @@ export class BaiduXilingProvider {
         headers: { Authorization: this.generateAuth().authorization },
         params: { systemFigure: true, item, pageNo, pageSize },
       })
+      if (data.code !== 0 && isQuotaResponse({ message: data.message.global })) throw new UpstreamQuotaError("xiling")
       if (data.code !== 0) throw new Error(`查询公共人像失败: ${data.message.global}`)
       const batch = data.result.result ?? []
       all.push(...batch)
@@ -386,6 +394,7 @@ export class BaiduXilingProvider {
       headers: { Authorization: this.generateAuth().authorization },
       params: { isSystem: true },
     })
+    if (data.code !== 0 && isQuotaResponse({ message: data.message.global })) throw new UpstreamQuotaError("xiling")
     if (data.code !== 0) throw new Error(`查询公共音色失败: ${data.message.global}`)
     return (data.result ?? []) as Awaited<ReturnType<BaiduXilingProvider["listPublicVoices"]>>
   }
@@ -409,6 +418,7 @@ export class BaiduXilingProvider {
       params: { taskId },
     })
 
+    if (data.code !== 0 && isQuotaResponse({ message: data.message.global })) throw new UpstreamQuotaError("xiling")
     if (data.code !== 0) throw new Error(`查询视频合成任务失败: ${data.message.global}`)
     return data.result
   }

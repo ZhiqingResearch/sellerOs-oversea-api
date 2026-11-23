@@ -4,6 +4,7 @@ import { NestExpressApplication } from "@nestjs/platform-express"
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger"
 import { WINSTON_MODULE_NEST_PROVIDER, WINSTON_MODULE_PROVIDER } from "nest-winston"
 import { Logger as WinstonLogger } from "winston"
+import { createAuditRequestQueue } from "./open-api/asin-audit-request-queue"
 import { AppModule } from "./app.module"
 import { AllExceptionsFilter } from "./common/filters/http-exception.filter"
 import { PrismaExceptionFilter } from "./common/filters/prisma-exception.filter"
@@ -16,6 +17,7 @@ async function bootstrap() {
   })
 
   // Stripe webhook 验签需要原始请求体：json 解析前把 buf 挂到 req.rawBody（billing/webhooks/stripe 使用）
+  app.use("/api/open/asin-audit", createAuditRequestQueue())
   app.useBodyParser("json", {
     limit: "5mb",
     verify: (req: { rawBody?: Buffer }, _res: unknown, buf: Buffer) => {

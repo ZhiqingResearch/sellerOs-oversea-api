@@ -1,11 +1,14 @@
+import { UnifiedGenerationRecordReader } from "./unified-generation-record-reader"
 import { Module } from "@nestjs/common"
 import { MembershipModule } from "../membership/membership.module"
 import { PricingModule } from "../pricing/pricing.module"
 import { TeamModule } from "../team/team.module"
 import { AuditPrismaService } from "./audit-prisma.service"
 import { FeatureRegistryService } from "./feature-registry.service"
+import { GenerationRecordDetailService } from "./generation-record-detail.service"
 import { GenerationRecordService } from "./generation-record.service"
 import { InternalCreditController } from "./internal-credit.controller"
+import { TextGenerationRecordService } from "./text-generation-record.service"
 import { UsageController } from "./usage.controller"
 import { UsageService } from "./usage.service"
 
@@ -13,7 +16,15 @@ import { UsageService } from "./usage.service"
 @Module({
   imports: [PricingModule, MembershipModule, TeamModule],
   controllers: [UsageController, InternalCreditController],
-  providers: [UsageService, GenerationRecordService, AuditPrismaService, FeatureRegistryService],
+  providers: [
+    UsageService,
+    GenerationRecordService,
+    UnifiedGenerationRecordReader,
+    GenerationRecordDetailService,
+    TextGenerationRecordService,
+    AuditPrismaService,
+    FeatureRegistryService,
+  ],
   exports: [UsageService, FeatureRegistryService],
 })
 export class UsageModule {}

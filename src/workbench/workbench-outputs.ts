@@ -3,11 +3,14 @@ import { uiLanguage, uiText } from "../common/i18n/request-language"
 import { isJsonObject } from "../common/utils/canonical-json"
 import { formatCompetitorRecordTitle } from "../competitor-analysis/competitor-analysis-record.validator"
 import { englishListingHistoryTitle } from "../listing/listing-history-title"
+import { reportTitle } from "../patent-query/patent-query.constants"
+import { input } from "../patent-query/patent-query.types"
 import type { PrismaService } from "../prisma/prisma.service"
 import { englishProductFactoryRecordName } from "../product-factory/product-factory-record-name"
 
 /** 工作台聚合的功能 key；与前端功能分布卡片一一对应 */
 export enum WorkbenchFeatureKey {
+  PATENT_QUERY = "patent_query",
   /** ASIN 取证 */
   ASIN_EVIDENCE = "asin_evidence",
   /** ASIN 自审 */
@@ -112,10 +115,39 @@ function defineQuery(
 
 /**
  * 工作台产出查询注册表：每个功能一个 defineQuery 块，新增业务在这里追加一块即可接入聚合，
- * WorkbenchService / 模块注册无需改动。侵权排查后端暂无记录存储，未列入。
+ * WorkbenchService / 模块注册无需改动。产品专利查询按已结算报告计数。
  */
 export function workbenchOutputQueries(prisma: PrismaService): WorkbenchOutputQuery[] {
   return [
+    defineQuery(WorkbenchFeatureKey.PATENT_QUERY, ["产品专利查询", "Product IP Screening"], {
+      count: (userId, since) =>
+        prisma.patentQueryTask.count({
+          where: {
+            userId,
+            deletedAt: null,
+            status: { in: ["COMPLETED", "PARTIAL"] },
+            ...timeWhere(since),
+          },
+        }),
+      latestRows: async (userId, since, limit) =>
+        (
+          await prisma.patentQueryTask.findMany({
+            where: {
+              userId,
+              deletedAt: null,
+              status: { in: ["COMPLETED", "PARTIAL"] },
+              ...timeWhere(since),
+            },
+            select: { id: true, input: true, createdAt: true },
+            orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+            take: limit,
+          })
+        ).map(row => ({
+          id: String(row.id),
+          title: truncateTitle(reportTitle(input(row.input))),
+          createdAt: row.createdAt,
+        })),
+    }),
     // ASIN 取证：取证记录表不在 SOFT_DELETE_MODELS 自动过滤集合内（见 prisma.service.ts），需显式排除软删
     defineQuery(WorkbenchFeatureKey.ASIN_EVIDENCE, ["ASIN 取证", "ASIN Evidence"], {
       count: (userId, since) =>

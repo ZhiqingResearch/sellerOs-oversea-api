@@ -1,0 +1,61 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`正式分支原产出等价性 可选接口失败：冷缓存、重复读取的完整证据、报告指标与AI输入不变 1`] = `
+{
+  "aiInput": "7da2726a1a199f4edc31748b347ece659bdeb63f88cbd70f9ae515e05d9a71ca",
+  "consistency": "74dfb229598ce786787fc40f2b26d991071ac044f8b144624b835c79f8d95134",
+  "evidence": "5b7b8a3b3e57b704ef03b71b29c27b80bd77e1cf2753b2576061a9cf8cde172f",
+  "focused": "2e0ac47612474625af47f668fd6eda283abcb8242321c8cb77c6ccbeb4a48888",
+  "input": "95519519ba1157867d81fed1c883aece8d6847765b406ae43507adf261f06db8",
+  "reads": "d4776955c929d751ac3f39f4a5f047455c032753cff99b2fd90510b794c81e11",
+  "resolution": "c006d4479ff807b8ef8ba1e1fc505f18ddceb9a242c56df3935dfeea17b7fad9",
+}
+`;
+
+exports[`正式分支原产出等价性 完整数据：冷缓存、重复读取的完整证据、报告指标与AI输入不变 1`] = `
+{
+  "aiInput": "3046edd6c6a8b2c7c74b44596e748c8c014168fd8a90ccfb0c2a57de85320092",
+  "consistency": "74dfb229598ce786787fc40f2b26d991071ac044f8b144624b835c79f8d95134",
+  "evidence": "79d999f122489616cabe7b23b2918047caed92249189af749297856f758e4750",
+  "focused": "52f710d4ec92357190938ff8bfdf83daa017032af982a5aabcc8d13566622ea6",
+  "input": "4e1c3922f1095931d910d8e7f3d4bb7a381ed4e2940914a90c16a4fc83452517",
+  "reads": "787aa0a76844dc591ec12c3e8f7b76e2960facc65889e31b29f7ffd8a95b06e3",
+  "resolution": "c006d4479ff807b8ef8ba1e1fc505f18ddceb9a242c56df3935dfeea17b7fad9",
+}
+`;
+
+exports[`正式分支原产出等价性 缺失及显式空值：冷缓存、重复读取的完整证据、报告指标与AI输入不变 1`] = `
+{
+  "aiInput": "1f65ba694410b2f1de338c7866495841951660bf62b20caca1da7861d3848818",
+  "consistency": "74dfb229598ce786787fc40f2b26d991071ac044f8b144624b835c79f8d95134",
+  "evidence": "136fc0156d6ded0d2bb75222129bba43d03df045031184a32ea7a630eca4870b",
+  "focused": "84a78f2c8237c260cb52f7c5620fd6b53af6ba57b3c767c3b600dd55998c4406",
+  "input": "4c36aa7e13a787080805a4cd95cba144efee132a8492af9ddb62663f4d6bd6ec",
+  "reads": "daff522c120dd817a92291db2a0f6d539c2daffb1f1d4aeb91b95f4f5596fbaf",
+  "resolution": "c006d4479ff807b8ef8ba1e1fc505f18ddceb9a242c56df3935dfeea17b7fad9",
+}
+`;
+
+exports[`正式分支原产出等价性 详情逆序与销量并列：冷缓存、重复读取的完整证据、报告指标与AI输入不变 1`] = `
+{
+  "aiInput": "b140cfff889e8b910c89a90a12efcc13af734292ea6587a69c0e525f88d0fcd2",
+  "consistency": "74dfb229598ce786787fc40f2b26d991071ac044f8b144624b835c79f8d95134",
+  "evidence": "e95e86ec6a4f6b3729cb1c7a03b63c91c3925076f46348686e8e51cf18043931",
+  "focused": "410e570a29c96602cc2c8ef8ef56f43fb2381553b8fc4146f78959126bcb7f73",
+  "input": "892025d9667c7603857a8cf48a4866cf6f9b4bef7d5e40548d9e628da2e94e19",
+  "reads": "062fcb265a3521bfa63d66486d5bd53f83dea4d0febf417faa5b24304b4936ed",
+  "resolution": "c0f2c9d49677b6de6b2b60e7b93398765035b5383b16b2a030af34fe227f9883",
+}
+`;
+
+exports[`正式分支原产出等价性 跨批次350样本：冷缓存、重复读取的完整证据、报告指标与AI输入不变 1`] = `
+{
+  "aiInput": "4728164b225c2189bd1759c6ac6ab134a5a61349fff14ddfdae96a49ab429425",
+  "consistency": "74dfb229598ce786787fc40f2b26d991071ac044f8b144624b835c79f8d95134",
+  "evidence": "7c1fd68b7891d526028959b5ffaffb691cb9710b9ae8b3a8c4a1bb8086209b99",
+  "focused": "3fb104619292f2f78638f8d0dedc024673b88d203a84fa3442c076a663c0bf91",
+  "input": "6bbf7c658e134e52802df1e0f74f75dc4e864e5747ad2411d2e244aa0a693745",
+  "reads": "73081951b8c7cf2ad2ef843b587b096f8ba8ecc998f6883f15f4e9f28dce6870",
+  "resolution": "c006d4479ff807b8ef8ba1e1fc505f18ddceb9a242c56df3935dfeea17b7fad9",
+}
+`;

@@ -1,3 +1,6 @@
+import { normalizeForbiddenContent } from "../common/utils/forbidden-content"
+import { publicGenerationMetadata } from "../common/utils/generation-metadata"
+import { recordGenerationSuccess } from "../generation-record/generation-record-success"
 import {
   BadRequestException,
   ForbiddenException,
@@ -168,6 +171,7 @@ export class ImageProjectService {
       certifications: dto.certifications as Json | undefined,
       audience: dto.audience as Json | undefined,
       extra: dto.extra,
+      forbiddenContent: normalizeForbiddenContent(dto.forbiddenContent),
       manualPdfUrl: dto.manualPdfUrl,
       sourceUrl: dto.sourceUrl,
       sourceLocale: dto.sourceLocale ? normalizeLocale(dto.sourceLocale) : undefined,
@@ -473,8 +477,30 @@ export class ImageProjectService {
       if (dto.sourceJobId) {
         await tx.$queryRaw`SELECT id FROM ImageGenJob WHERE id = ${dto.sourceJobId} FOR UPDATE`
         const job = await tx.imageGenJob.findFirst({ where: { id: dto.sourceJobId, userId, source, businessType: "IMAGE_CREATIVE" }, include: { items: true } })
-        if (!job || job.taskId != null || !children.length) throw new BadRequestException("改图任务不存在、已归档或没有可归档图片")
+        if (!job) throw new BadRequestException("改图任务不存在、已归档或没有可归档图片")
         const request = jsonObject(job.request)
+        if (source === "platform" && request.projectId) {
+          if (request.projectId !== projectId) throw new BadRequestException("该改图任务已绑定其他项目")
+          if (job.taskId != null) {
+            const existing = await tx.generationTask.findFirst({
+              where: { id: job.taskId, projectId, userId, source, sourceJobId: job.id, deletedAt: null },
+              include: { generatedImages: { where: { source, deletedAt: null }, orderBy: { order: "asc" } } },
+            })
+            if (!existing) throw new BadRequestException("已归档任务不存在或已删除")
+            return existing
+          }
+          if (job.items.some(i => i.status !== "SUCCEEDED" && i.status !== "FAILED") ||
+            children.length !== job.items.filter(i => i.status === "SUCCEEDED" && i.deletedAt == null && i.url).length) {
+            throw new BadRequestException("请等待改图完成后归档全部成功图片")
+          }
+          const target = await tx.imageProject.findFirst({
+            where: { id: projectId, userId, source, type: "GENERAL", deletedAt: null, status: { not: "ARCHIVED" } },
+            select: { id: true },
+          })
+          if (!target) throw new BadRequestException("自动入库的目标项目已不可用")
+          dto = { ...dto, presetCategory: "批量改图" }
+        }
+        if (job.taskId != null || !children.length) throw new BadRequestException("改图任务不存在、已归档或没有可归档图片")
         const seen = new Set<number>()
         for (const child of children) {
           const matched = job.items.filter(i => i.status === "SUCCEEDED" && i.deletedAt == null && i.url && i.url === child.url)
@@ -488,7 +514,8 @@ export class ImageProjectService {
         }
         archiveSpec = { kind: "ARCHIVED_IMAGEGEN", modelPublicId: request.modelPublicId ?? jsonObject(job.items.find(i => i.status === "SUCCEEDED")?.gatewayImage).modelPublicId ?? job.model,
           ...(request.localRedraw ? { localRedraw: request.localRedraw } : {}),
-          form: { resolutionTier: request.resolutionTier ?? null, aspectRatio: request.aspectRatio ?? null }, sourceJobId: job.id }
+          form: { resolutionTier: request.resolutionTier ?? null, aspectRatio: request.aspectRatio ?? null,
+            mode: request.mode ?? null }, sourceJobId: job.id }
       }
       const task = await tx.generationTask.create({
         data: {
@@ -540,6 +567,7 @@ export class ImageProjectService {
       await linkSourceJob(tx, task.id)
       return task
     })
+    if (task.status === "SUCCESS") await recordGenerationSuccess(this.prisma, "generationTask", task.id)
     return (await this.publicTasks([task]))[0]
   }
 
@@ -589,7 +617,7 @@ export class ImageProjectService {
       const generatedImages = task.generatedImages?.map(image => {
         const dimensions = gatewayImageDimensions(jsonObject(image.deliveryMeta).gatewayImage)
         return {
-          ...localizedTaskErrors(image),
+          ...localizedTaskErrors(publicGenerationMetadata(image)),
           originalUrl: image.originalUrl ?? gatewayOriginalUrl(jsonObject(image.deliveryMeta).gatewayImage),
           width: image.width ?? dimensions.width ?? null,
           height: image.height ?? dimensions.height ?? null,
@@ -734,7 +762,7 @@ export class ImageProjectService {
 
   async updateTask(taskId: number, dto: UpdateTaskDto, userId: number) {
     await this.assertTaskOwned(taskId, userId)
-    return this.prisma.generationTask.update({
+    const result = await this.prisma.generationTask.update({
       where: { id: taskId, source: "platform", project: { source: "platform" } },
       data: { status: dto.status, errorMessage: dto.errorMessage },
       include: {
@@ -744,6 +772,8 @@ export class ImageProjectService {
         },
       },
     })
+    if (dto.status === "SUCCESS") await recordGenerationSuccess(this.prisma, "generationTask", taskId)
+    return publicGenerationMetadata(result)
   }
 
   async deleteTask(taskId: number, userId: number) {
@@ -926,7 +956,7 @@ export class ImageProjectService {
         adopted: dto.adopted,
         order: dto.order,
       },
-    })
+    }).then(publicGenerationMetadata)
   }
 
   async deleteGeneratedImage(imageId: number, userId: number) {

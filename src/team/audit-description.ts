@@ -33,9 +33,14 @@ export function describeAuditLog(
       return "修改团队信息"
     case TeamAuditAction.TEAM_ADJUST: {
       const parts: string[] = []
-      const delta = num(m, "rechargeCreditsDelta")
+      const creditType = str(m, "creditType")
+      const delta = num(m, "creditsDelta") ?? num(m, "rechargeCreditsDelta")
       const extend = num(m, "extendDays")
-      if (delta != null) parts.push(`充值积分 ${delta > 0 ? "+" : ""}${delta}`)
+      if (delta != null) {
+        const label =
+          creditType === "PACKAGE" ? "套餐积分" : creditType === "GIFT" ? "赠送积分" : "充值积分"
+        parts.push(`${label} ${delta > 0 ? "+" : ""}${delta}`)
+      }
       if (extend != null) parts.push(`有效期延长 ${extend} 天`)
       return parts.length ? `平台调整：${parts.join("，")}` : "平台调整"
     }

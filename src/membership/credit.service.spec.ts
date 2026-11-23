@@ -184,6 +184,98 @@ describe("CreditService", () => {
     })
   })
 
+  describe("adjustCreditsByBucket（后台精确积分桶调整）", () => {
+    it("正数：按指定桶建批次，PACKAGE/GIFT 未传到期日默认 30 天，流水记录真实 bucket", async () => {
+      const before = Date.now()
+      await service.adjustCreditsByBucket(1, CreditBucket.PACKAGE, 500, {
+        source: "admin.subscription.adjust",
+        meta: { operatorId: 9 },
+      })
+      const after = Date.now()
+
+      const lot = firstArgs<LotCreateArg>(prisma.creditLot.create)[0]
+      expect(lot.data.bucket).toBe(CreditBucket.PACKAGE)
+      expect(lot.data.amount.toString()).toBe("500")
+      expect(lot.data.expiresAt).toBeInstanceOf(Date)
+      expect(lot.data.expiresAt!.getTime()).toBeGreaterThanOrEqual(
+        before + 30 * 24 * 60 * 60 * 1000
+      )
+      expect(lot.data.expiresAt!.getTime()).toBeLessThanOrEqual(after + 30 * 24 * 60 * 60 * 1000)
+      const txn = firstArgs<{
+        data: { direction: CreditDirection; bucket: CreditBucket; meta: { operatorId: number } }
+      }>(prisma.creditTransaction.create)[0]
+      expect(txn.data.direction).toBe(CreditDirection.CREDIT)
+      expect(txn.data.bucket).toBe(CreditBucket.PACKAGE)
+      expect(txn.data.meta.operatorId).toBe(9)
+    })
+
+    it("团队正数：批次与流水均带 teamId；RECHARGE 永远 expiresAt=null", async () => {
+      await service.adjustCreditsByBucket(100, CreditBucket.RECHARGE, 800, {
+        teamId: 7,
+        expiresAt: new Date("2027-01-01T00:00:00.000Z"),
+        source: "admin.team.adjust",
+      })
+
+      const lot = firstArgs<LotCreateArg & { data: { teamId: number | null } }>(
+        prisma.creditLot.create
+      )[0]
+      expect(lot.data.bucket).toBe(CreditBucket.RECHARGE)
+      expect(lot.data.expiresAt).toBeNull()
+      expect(lot.data.teamId).toBe(7)
+      const txn = firstArgs<{ data: { teamId: number | null; bucket: CreditBucket } }>(
+        prisma.creditTransaction.create
+      )[0]
+      expect(txn.data.teamId).toBe(7)
+      expect(txn.data.bucket).toBe(CreditBucket.RECHARGE)
+    })
+
+    it("负数：只从指定桶 FIFO 扣，不跨桶，也不改动其他桶", async () => {
+      prisma.$queryRaw.mockResolvedValue([
+        { id: 11, remaining: new Decimal(100) },
+        { id: 12, remaining: new Decimal(200) },
+      ])
+
+      await service.adjustCreditsByBucket(1, CreditBucket.GIFT, -150, {
+        source: "admin.subscription.adjust",
+      })
+
+      const updates = firstArgs<LotUpdateArg>(prisma.creditLot.update)
+      expect(updates).toHaveLength(2)
+      expect(updates[0]).toMatchObject({
+        where: { id: 11 },
+        data: { remaining: new Decimal(0), status: CreditLotStatus.EXHAUSTED },
+      })
+      expect(updates[1]).toMatchObject({
+        where: { id: 12 },
+        data: { remaining: new Decimal(150), status: CreditLotStatus.ACTIVE },
+      })
+      const txn = firstArgs<{ data: { direction: CreditDirection; bucket: CreditBucket } }>(
+        prisma.creditTransaction.create
+      )[0]
+      expect(txn.data.direction).toBe(CreditDirection.DEBIT)
+      expect(txn.data.bucket).toBe(CreditBucket.GIFT)
+    })
+
+    it("团队负数只按 teamId 锁池批次，不限制批次原 userId（管理员变更后仍可扣）", async () => {
+      prisma.$queryRaw.mockResolvedValue([{ id: 21, remaining: new Decimal(100) }])
+
+      await service.adjustCreditsByBucket(999, CreditBucket.GIFT, -50, { teamId: 7 })
+
+      const [query] = prisma.$queryRaw.mock.calls[0] as [{ strings: string[] }]
+      const sql = query.strings.join("?")
+      expect(sql).toContain("teamId = ?")
+      expect(sql).not.toContain("userId = ?")
+    })
+
+    it("负数余额不足：400 且不更新批次", async () => {
+      prisma.$queryRaw.mockResolvedValue([{ id: 11, remaining: new Decimal(50) }])
+      await expect(service.adjustCreditsByBucket(1, CreditBucket.PACKAGE, -100)).rejects.toThrow(
+        "套餐积分余额不足"
+      )
+      expect(prisma.creditLot.update).not.toHaveBeenCalled()
+    })
+  })
+
   describe("consume", () => {
     const noInviteUser = {
       id: 1,
@@ -444,7 +536,12 @@ describe("CreditService", () => {
     })
 
     it("生效折扣：链式跟随——邀请人也没开 → 继续上溯到开过开关的上级", async () => {
-      const chainNode = (id: number, canInvite: boolean, discount: string, invitedById: number | null) => ({
+      const chainNode = (
+        id: number,
+        canInvite: boolean,
+        discount: string,
+        invitedById: number | null
+      ) => ({
         id,
         canInvite,
         invitedById,

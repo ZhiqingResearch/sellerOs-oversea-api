@@ -17,6 +17,7 @@ function buildPooledUrl(): string {
 
 /** 启用软删除过滤的模型（读操作自动过滤 deletedAt != null） */
 const SOFT_DELETE_MODELS = new Set<string>([
+  Prisma.ModelName.PatentQueryTask,
   Prisma.ModelName.Customer,
   Prisma.ModelName.Account,
   Prisma.ModelName.Avatar,

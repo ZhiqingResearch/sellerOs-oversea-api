@@ -105,6 +105,9 @@ export interface ReviewEvidence {
 }
 
 export interface CompetitorEvidence {
+  group?: import("./de.types").EvidenceGroup
+  targetReference?: import("./de.types").EvidenceGroup
+  sharedKeywordScope?: string
   filled: boolean
   missingReason?: string
   competitorAsins?: string[]
@@ -112,7 +115,7 @@ export interface CompetitorEvidence {
   keywords?: { kw: string; tier: string; searches: string }[]
 }
 
-export type EvidenceSource = "sif" | "mcp" | "paste" | "erp" | "apify" | "upload"
+export type EvidenceSource = "sif" | "xiyou" | "mcp" | "paste" | "erp" | "apify" | "upload"
 
 /** 六卡完整证据包 — LLM 打分入参 */
 export interface AuditEvidence {
@@ -126,6 +129,9 @@ export interface AuditEvidence {
   D: KeywordTrafficEvidence
   E: AsinPerformanceEvidence
   meta: {
+    primarySource?: "sif" | "xiyou"
+    /** 独立取证生成请求号，归档时用于精确关联按量扣费。 */
+    generationRequestId?: string
     sources: Partial<Record<"A" | "P" | "B" | "C" | "D" | "E", EvidenceSource[]>>
     sifDataReady?: boolean | null
     sifWarnings?: string[]

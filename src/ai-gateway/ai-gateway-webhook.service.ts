@@ -1,3 +1,5 @@
+import { recordGenerationSuccess } from "../generation-record/generation-record-success"
+import { isQuotaResponse, quotaTaskMessage } from "../common/errors/upstream-quota"
 import {
   BadRequestException,
   Injectable,
@@ -414,7 +416,7 @@ export class AiGatewayWebhookService implements OnModuleInit {
 
   /** 失败直接透出网关原始错误（Gateway 为自研应用）；无 error 对象时兜底中文 */
   private errorMessageOf(task: VideoTask): string {
-    if ("error" in task && task.error?.message) return task.error.message
+    if ("error" in task && task.error?.message) return quotaTaskMessage(task.error, "unknown", task.error.message)
     return "AI Gateway 视频生成失败"
   }
 
@@ -568,7 +570,7 @@ export class AiGatewayWebhookService implements OnModuleInit {
         `[AI Gateway] 视频任务失败 task=${task.id} status=${task.status} code=${task.error.code} type=${task.error.type}: ${task.error.message}`
       )
     }
-    const errorMessage =
+    let errorMessage =
       task.status === "failed"
         ? this.errorMessageOf(task)
         : task.status === "canceled"
@@ -656,6 +658,7 @@ export class AiGatewayWebhookService implements OnModuleInit {
           )
         : null
     const skipMeteredCharge = fixedPriceMap != null && task.status !== "succeeded"
+    if (task.status === "failed" && isQuotaResponse(task.error)) errorMessage = quotaTaskMessage(task.error, skipMeteredCharge || (taskUsage != null && !this.isChargeableAmount(taskUsage.amount)) ? "not_charged" : "unknown", errorMessage ?? "生成失败", "item")
 
     // 价格倍率：网关 usage × 倍率后计费（与前端报价同口径）；meta 留原始金额与倍率供对账
     const priceMultiplier =
@@ -752,6 +755,7 @@ export class AiGatewayWebhookService implements OnModuleInit {
     )
 
     if (applied) {
+      await recordGenerationSuccess(this.prisma, "videoTask", localTask.id, { credits: !fixedCharge && taskUsage && !this.isChargeableAmount(taskUsage.amount) ? 0 : undefined })
       this.logger.log(
         `[AI Gateway 回调] task=${task.id} status=${status} usage=${taskUsage?.amount ?? "0"} CNY`
       )
@@ -780,7 +784,7 @@ export class AiGatewayWebhookService implements OnModuleInit {
       expired: "TIMEOUT",
     }[task.status]
     const url = task.status === "succeeded" ? task.result.videos[0].url : null
-    const errorMessage =
+    let errorMessage =
       task.status === "failed"
         ? this.errorMessageOf(task)
         : task.status === "canceled"
@@ -808,6 +812,7 @@ export class AiGatewayWebhookService implements OnModuleInit {
         )
       : null
     const skipMeteredCharge = fixedPriceMap != null && !succeeded
+    if (task.status === "failed" && isQuotaResponse(task.error)) errorMessage = quotaTaskMessage(task.error, skipMeteredCharge || (taskUsage != null && !this.isChargeableAmount(taskUsage.amount)) ? "not_charged" : "unknown", errorMessage ?? "生成失败", "item")
 
     // 价格倍率：网关 usage × 倍率后计费（与前端报价同口径）；meta 留原始金额与倍率供对账
     const priceMultiplier =
@@ -901,10 +906,11 @@ export class AiGatewayWebhookService implements OnModuleInit {
           }
         )
       }
-      return true
+        return true
     })
 
     if (applied) {
+      await recordGenerationSuccess(this.prisma, "storyboardVideo", localTask.id, { credits: !fixedCharge && taskUsage && !this.isChargeableAmount(taskUsage.amount) ? 0 : undefined })
       this.logger.log(
         `[AI Gateway 分镜回调] task=${task.id} video=${localTask.id} status=${status} usage=${taskUsage?.amount ?? "0"} CNY`
       )
@@ -933,7 +939,7 @@ export class AiGatewayWebhookService implements OnModuleInit {
       expired: "TIMEOUT",
     }[task.status]
     const resultUrl = task.status === "succeeded" ? task.result.videos[0].url : null
-    const errorMessage =
+    let errorMessage =
       task.status === "failed"
         ? this.errorMessageOf(task)
         : task.status === "canceled"
@@ -977,6 +983,7 @@ export class AiGatewayWebhookService implements OnModuleInit {
         )
       : null
     const skipMeteredCharge = fixedPriceMap != null && !succeeded
+    if (task.status === "failed" && isQuotaResponse(task.error)) errorMessage = quotaTaskMessage(task.error, skipMeteredCharge || (taskUsage != null && !this.isChargeableAmount(taskUsage.amount)) ? "not_charged" : "unknown", errorMessage ?? "生成失败", "item")
 
     // 价格倍率：网关 usage × 倍率后计费（与前端报价同口径）；meta 留原始金额与倍率供对账
     const priceMultiplier =
@@ -1066,6 +1073,7 @@ export class AiGatewayWebhookService implements OnModuleInit {
     )
 
     if (applied) {
+      await recordGenerationSuccess(this.prisma, "beautyTask", localTask.id, { credits: !fixedCharge && taskUsage && !this.isChargeableAmount(taskUsage.amount) ? 0 : undefined })
       this.logger.log(
         `[AI Gateway 美妆回调] task=${task.id} beautyTask=${localTask.id} status=${status} usage=${taskUsage?.amount ?? "0"} CNY`
       )
@@ -1403,7 +1411,7 @@ export class AiGatewayWebhookService implements OnModuleInit {
       canceled: "CANCELLED",
       expired: "TIMEOUT",
     }[task.status]
-    const errorMessage =
+    let errorMessage =
       task.status === "failed"
         ? "AI Gateway 图片生成失败"
         : task.status === "canceled"
@@ -1427,6 +1435,7 @@ export class AiGatewayWebhookService implements OnModuleInit {
           ? "PORTRAIT"
           : "IMAGE_GENERATION"
     const fixedCredits = await this.usage.gatewayFixedImageCredits(localTask.model, pricingCategory)
+    if (task.status === "failed" && isQuotaResponse(task.error)) errorMessage = quotaTaskMessage(task.error, !storedImages.length && (fixedCredits != null || (taskUsage != null && !this.isChargeableAmount(taskUsage.amount))) ? "not_charged" : "unknown", errorMessage ?? "图片生成失败", storedImages.length ? "partial" : "item")
     const priceMultiplier =
       !fixedCredits && taskUsage && this.isChargeableAmount(taskUsage.amount)
         ? await this.usage.gatewayPriceMultiplier(localTask.model)
@@ -1628,6 +1637,7 @@ export class AiGatewayWebhookService implements OnModuleInit {
     )
 
     if (applied) {
+      await recordGenerationSuccess(this.prisma, "generationTask", localTask.id, { credits: !fixedCredits && taskUsage && !this.isChargeableAmount(taskUsage.amount) ? 0 : undefined })
       this.logger.log(
         `[AI Gateway 图片回调] task=${task.id} status=${status} outputs=${storedImages.length} usage=${taskUsage?.amount ?? "0"} CNY`
       )

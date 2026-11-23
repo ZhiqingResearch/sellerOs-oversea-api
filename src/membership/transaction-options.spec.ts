@@ -87,8 +87,10 @@ describe("transaction-options", () => {
     expect(classifyConsumeSource(M, CreditBucket.GIFT, false, D)).toBe("OWN_GIFT")
     // 客服补偿扣回：PACKAGE+GIFT 合池扣减行（bucket=null）归「个人套餐积分」
     expect(classifyConsumeSource(M, null, false, D)).toBe("OWN_PACKAGE")
-    // 企业侧池调整扣减（teamId 有值，仅动 RECHARGE）归「企业充值积分」
+    // 企业侧池调整扣减（teamId 有值）按真实桶归类
     expect(classifyConsumeSource(M, CreditBucket.RECHARGE, false, D, 10)).toBe("TEAM_RECHARGE")
+    expect(classifyConsumeSource(M, CreditBucket.PACKAGE, false, D, 10)).toBe("TEAM_PACKAGE")
+    expect(classifyConsumeSource(M, CreditBucket.GIFT, false, D, 10)).toBe("TEAM_GIFT")
     // 调增是入账、非扣费行
     expect(classifyConsumeSource(M, null, false, C)).toBeNull()
     expect(classifyConsumeSource(M, CreditBucket.RECHARGE, false, C)).toBeNull()

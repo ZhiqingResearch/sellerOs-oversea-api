@@ -1,3 +1,4 @@
+jest.mock("../generation-record/generation-record-success", () => ({ recordGenerationSuccess: jest.fn().mockResolvedValue(undefined) }))
 import { BadRequestException, ConflictException, NotFoundException } from "@nestjs/common"
 import { withUiLanguage } from "../common/i18n/request-language"
 import { PrismaService } from "../prisma/prisma.service"

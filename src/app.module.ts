@@ -4,8 +4,8 @@ import { ConfigModule } from "@nestjs/config"
 import { ScheduleModule } from "@nestjs/schedule"
 import { WinstonModule } from "nest-winston"
 import { AiGatewayModule } from "./ai-gateway/ai-gateway.module"
-import { AuthEmailModule } from "./auth-email/auth-email.module"
 import { AnnouncementModule } from "./announcement/announcement.module"
+import { AuthEmailModule } from "./auth-email/auth-email.module"
 import { AuthModule } from "./auth/auth.module"
 import { BeautyWorkflowModule } from "./beauty-workflow/beauty-workflow.module"
 import { CategoryAnalysisModule } from "./category-analysis/category-analysis.module"
@@ -38,6 +38,7 @@ import { MenuModule } from "./menu/menu.module"
 import { OpenApiModule } from "./open-api/open-api.module"
 import { OrgsModule } from "./orgs/orgs.module"
 import { OssModule } from "./oss/oss.module"
+import { PatentQueryModule } from "./patent-query/patent-query.module"
 import { PricingModule } from "./pricing/pricing.module"
 import { ProductFactoryModule } from "./product-factory/product-factory.module"
 import { ProductLibraryModule } from "./product-library/product-library.module"
@@ -63,6 +64,7 @@ import { WorkbenchModule } from "./workbench/workbench.module"
 @Module({
   imports: [
     CategoryAnalysisModule,
+    PatentQueryModule,
     ConfigModule.forRoot({ isGlobal: true, validate: validateEnvironment }),
     ScheduleModule.forRoot(),
     WinstonModule.forRootAsync(winstonAsyncConfig),

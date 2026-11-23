@@ -4,6 +4,12 @@ import { Prisma } from "@prisma/client"
 import axios from "axios"
 import { createHash } from "crypto"
 import { uiText } from "../common/i18n/request-language"
+import {
+  isQuotaResponse,
+  isUpstreamQuotaError,
+  quotaFailure,
+  UpstreamQuotaError,
+} from "../common/errors/upstream-quota"
 import { canonicalJson } from "../common/utils/canonical-json"
 import { PrismaService } from "../prisma/prisma.service"
 import {
@@ -257,6 +263,8 @@ export interface CategoryDataUsage {
 export class CategoryEvidenceProvider {
   private readonly cache = new Map<string, EvidenceCacheEntry>()
   private readonly inFlight = new Map<string, Promise<unknown>>()
+  private readonly asinBatchQueues = new Map<string, Promise<unknown>>()
+  private readonly keywordBatchQueues = new Map<string, Promise<unknown>>()
   constructor(
     private readonly config: ConfigService,
     private readonly prisma: PrismaService
@@ -353,6 +361,7 @@ export class CategoryEvidenceProvider {
       } catch {
         notices.push(uiText("新品补样暂不可用，新品相关指标可能不足", "Additional new-product samples are unavailable; related metrics may be incomplete"))
       }
+      // 详情沿用原分组及供应商返回顺序；并列销量的头部选择依赖稳定顺序。
       for (let index = 0; index < asins.length; index += 100)
         rows.push(
           ...parseSifSample(
@@ -435,25 +444,20 @@ export class CategoryEvidenceProvider {
       }
     } else notices.push(uiText("未匹配到关键词类目，关键词切入数据需补充", "No keyword category matched; keyword-entry data is incomplete"))
     const sortedRows = [...rows].sort((a, b) => (b.sales ?? -1) - (a.sales ?? -1))
-    const history: Record<string, unknown> = {}
     const historyAsins = sortedRows.slice(0, 200).map(row => row.asin)
-    for (let index = 0; index < historyAsins.length; index += 10) {
-      try {
-        Object.assign(
-          history,
-          asObject(
-            await this._sif(
-              "asinsHistorySales",
-              site,
-              { asins: historyAsins.slice(index, index + 10), month: 18 },
-              usage
-            )
-          )
-        )
-      } catch {
-        notices.push(uiText("部分月销历史需补充", "Some monthly sales history is unavailable"))
+    const history = await this._sifAsins(
+      "asinsHistorySales",
+      site,
+      historyAsins,
+      { month: 18 },
+      usage,
+      () => {
+        notices.push("部分月销历史需补充")
       }
-    }
+    ).catch(() => {
+      notices.push("部分月销历史需补充")
+      return {}
+    })
     months.push(...parseSalesHistory(history, rows))
     const trends: HeadTrend[] = []
     const endDate = new Date().toISOString().slice(0, 10)
@@ -621,7 +625,27 @@ export class CategoryEvidenceProvider {
     }
   }
 
-  private async _keywordBatch(
+  private _keywordBatch(
+    endpoint: string,
+    site: string,
+    keywords: string[],
+    options: Record<string, unknown>,
+    usage: CategoryDataUsage
+  ): Promise<unknown> {
+    const queueKey = this._sifCacheKey(endpoint, site, options, false)
+    const pending = this.keywordBatchQueues.get(queueKey) ?? Promise.resolve()
+    const promise = pending
+      .catch(() => undefined)
+      .then(() => this._loadKeywordBatch(endpoint, site, keywords, options, usage))
+      .finally(() => {
+        if (this.keywordBatchQueues.get(queueKey) === promise)
+          this.keywordBatchQueues.delete(queueKey)
+      })
+    this.keywordBatchQueues.set(queueKey, promise)
+    return promise
+  }
+
+  private async _loadKeywordBatch(
     endpoint: string,
     site: string,
     keywords: string[],
@@ -809,6 +833,109 @@ export class CategoryEvidenceProvider {
     isGet = false,
     cachePayload = payload
   ): Promise<unknown> {
+    if (
+      !isGet &&
+      cachePayload === payload &&
+      Array.isArray(payload.asins) &&
+      endpoint === "asinsHistorySales"
+    ) {
+      const { asins, ...options } = payload
+      return this._sifAsins(endpoint, site, asins as string[], options, usage)
+    }
+    return this._requestSif(endpoint, site, payload, usage, isGet, cachePayload)
+  }
+
+  private _sifAsins(
+    endpoint: string,
+    site: string,
+    asins: string[],
+    options: Record<string, unknown>,
+    usage: CategoryDataUsage,
+    onBatchError?: (error: unknown) => void
+  ): Promise<unknown> {
+    // 同进程按站点、端点及筛选条件排队，交叠批次等待后重查逐 ASIN 缓存。
+    const queueKey = this._sifCacheKey(endpoint, site, options, false)
+    const pending = this.asinBatchQueues.get(queueKey) ?? Promise.resolve()
+    const promise = pending
+      .catch(() => undefined)
+      .then(() => this._sifAsinBatch(endpoint, site, asins, options, usage, onBatchError))
+      .finally(() => {
+        if (this.asinBatchQueues.get(queueKey) === promise) this.asinBatchQueues.delete(queueKey)
+      })
+    this.asinBatchQueues.set(queueKey, promise)
+    return promise
+  }
+
+  private async _sifAsinBatch(
+    endpoint: string,
+    site: string,
+    requestedAsins: string[],
+    options: Record<string, unknown>,
+    usage: CategoryDataUsage,
+    onBatchError?: (error: unknown) => void
+  ): Promise<unknown> {
+    const asins = [...new Set(requestedAsins.map(asin => asin.trim().toUpperCase()))]
+    const keyOf = (asin: string) =>
+      `sif:asin:v2:${site}:${endpoint}:${asin}:${canonicalJson(options)}`
+    const entries = await Promise.all(asins.map(asin => this._restoreCache(keyOf(asin))))
+    const values = new Map<string, unknown>()
+    const resolvedAsins = new Set<string>()
+    for (let index = 0; index < asins.length; index++) {
+      const entry = entries[index]
+      if (entry) {
+        const cached = asObject(await entry.promise)
+        resolvedAsins.add(asins[index])
+        if (cached.isPresent) values.set(asins[index], cached.value)
+      }
+    }
+    const storeRows = async (requested: string[], data: unknown, expiresAt: number) => {
+      const results = new Map(Object.entries(asObject(data)))
+      for (const asin of requested) {
+        // 显式 null 与未返回 ASIN 必须区分，历史覆盖率分母依赖返回键数量。
+        const isPresent = results.has(asin)
+        const value = results.get(asin) ?? null
+        await this._storeCache(keyOf(asin), { isPresent, value }, expiresAt)
+        resolvedAsins.add(asin)
+        if (isPresent) values.set(asin, value)
+      }
+    }
+    const batchSize = 10
+    // 先复用旧版本原分组的整批缓存，再对全部缺失商品重新分组。
+    for (let index = 0; index < asins.length; index += batchSize) {
+      const original = asins.slice(index, index + batchSize)
+      const missing = original.filter(asin => !resolvedAsins.has(asin))
+      if (!missing.length) continue
+      const batch = await this._restoreCache(
+        this._sifCacheKey(endpoint, site, { ...options, asins: original }, false)
+      )
+      if (batch) await storeRows(missing, await batch.promise, batch.expiresAt)
+    }
+    const missing = asins.filter(asin => !resolvedAsins.has(asin))
+    for (let index = 0; index < missing.length; index += batchSize) {
+      const requested = missing.slice(index, index + batchSize)
+      try {
+        const payload = { ...options, asins: requested }
+        const data = await this._requestSif(endpoint, site, payload, usage)
+        const batch = await this._restoreCache(this._sifCacheKey(endpoint, site, payload, false))
+        await storeRows(requested, data, batch?.expiresAt ?? Date.now())
+      } catch (error) {
+        if (!onBatchError) throw error
+        onBatchError(error)
+      }
+    }
+    return Object.fromEntries(
+      asins.filter(asin => values.has(asin)).map(asin => [asin, values.get(asin)])
+    )
+  }
+
+  private _requestSif(
+    endpoint: string,
+    site: string,
+    payload: Record<string, unknown>,
+    usage: CategoryDataUsage,
+    isGet = false,
+    cachePayload = payload
+  ): Promise<unknown> {
     return this._cached(this._sifCacheKey(endpoint, site, cachePayload, isGet), async () => {
       const key = this.config.get<string>("SIF_API_KEY")?.trim()
       if (!key) throw new ServiceUnavailableException("类目数据服务尚未配置")
@@ -821,6 +948,8 @@ export class CategoryEvidenceProvider {
           data: isGet ? undefined : payload,
           timeout: 35000,
         })
+        if (response.data.code === -20 || response.data.code === -25)
+          throw new UpstreamQuotaError("sif")
         if (response.data.code !== 1) {
           const labels: Record<number, string> = {
             [-1]: "数据查询参数异常",
@@ -833,6 +962,9 @@ export class CategoryEvidenceProvider {
         this._recordDataCall(usage, "sif", endpoint)
         return response.data.data
       } catch (error) {
+        if (isUpstreamQuotaError(error)) throw quotaFailure(error, "not_charged")
+        if (isQuotaResponse(error))
+          throw quotaFailure(new UpstreamQuotaError("sif", 502), "not_charged")
         if (error instanceof BadGatewayException) throw error
         throw new BadGatewayException("类目数据请求失败，请稍后重试")
       }

@@ -11,6 +11,8 @@ import {
   Min,
 } from "class-validator"
 import { PaginationDto } from "../../common/dto/pagination.dto"
+import type { AdminAdjustableCreditBucket } from "../membership.constants"
+import { ADMIN_ADJUSTABLE_CREDIT_BUCKETS } from "../membership.constants"
 
 /** 个人订阅列表查询：状态/档位/关键词/到期日区间 + 分页 */
 export class QueryAdminSubscriptionDto extends PaginationDto {
@@ -52,11 +54,30 @@ export class QueryAdminSubscriptionDto extends PaginationDto {
   expiresEnd?: string
 }
 
-/** 客服补偿调整：赠送积分（可负数扣回）/ 延长有效期；至少传一项。不产生订单、不开收据 */
+/** 平台调整个人积分：可精确增减 RECHARGE/PACKAGE/GIFT；支持单独延长有效期 */
 export class AdjustSubscriptionDto {
   @ApiPropertyOptional({
+    enum: ADMIN_ADJUSTABLE_CREDIT_BUCKETS,
+    description: "积分类型：充值积分/套餐积分/赠送积分；传 creditsDelta 时必填",
+  })
+  @IsOptional()
+  @IsIn(ADMIN_ADJUSTABLE_CREDIT_BUCKETS)
+  creditType?: AdminAdjustableCreditBucket
+
+  @ApiPropertyOptional({
+    example: -500,
+    description: "积分变动（正=增加 / 负=扣减）；扣减时不得传 extendDays",
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  creditsDelta?: number
+
+  /** @deprecated 旧版赠送积分字段；新调用请使用 creditType + creditsDelta */
+  @ApiPropertyOptional({
     example: 500,
-    description: "赠送积分变动：正=发放（GIFT 桶，30 天过期）；负=按过期先后扣回，不得超剩余",
+    description: "【兼容旧版】赠送积分变动；新调用请使用 creditType + creditsDelta",
+    deprecated: true,
   })
   @IsOptional()
   @Type(() => Number)
@@ -99,6 +120,12 @@ export class AdminSubscriptionItemDto {
   daysLeft: number | null
   @ApiProperty({ example: "1250", description: "剩余积分（个人可消费=充值+套餐+赠送，字符串）" })
   points: string
+  @ApiProperty({ example: "5000", description: "充值积分余额（RECHARGE，永不过期）" })
+  rechargePoints: string
+  @ApiProperty({ example: "1000", description: "套餐积分余额（PACKAGE）" })
+  packagePoints: string
+  @ApiProperty({ example: "300", description: "赠送积分余额（GIFT）" })
+  giftPoints: string
 }
 
 export class AdminSubscriptionSummaryTierDto {

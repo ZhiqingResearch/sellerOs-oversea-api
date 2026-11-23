@@ -1,3 +1,5 @@
+import { recordGenerationSuccess } from "../generation-record/generation-record-success"
+import { isUpstreamQuotaError, quotaFailure, streamBeforeQuotaCharge } from "../common/errors/upstream-quota"
 import {
   BadGatewayException,
   BadRequestException,
@@ -6,6 +8,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from "@nestjs/common"
 import { ConfigService } from "@nestjs/config"
 import { Interval } from "@nestjs/schedule"
@@ -419,6 +422,20 @@ export class CategoryAnalysisService {
           return
         }
         await this.usage.assertFixedModuleAffordable(record.userId, "category.analysis", undefined, undefined, categories.length)
+        const useCatalog = this.config.get<string>("CATEGORY_ANALYSIS_MODEL_SOURCE") === "catalog"
+        const model = useCatalog ? await this.prisma.aiGatewayModel.findFirst({
+          where: {
+            category: "CATEGORY_ANALYSIS",
+            modality: "TEXT",
+            execMode: "SYNC",
+            enabled: true,
+            gatewayActive: true,
+          },
+          orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+          select: { publicId: true },
+        }) : null
+        if (useCatalog && !model)
+          throw new ServiceUnavailableException(uiText("类目分析模型尚未配置或不可用，请联系管理员", "The category analysis model is unavailable. Contact an administrator."))
         for (const category of categories) {
           const dataUsage: CategoryDataUsage = { totalCalls: 0, callDetail: {}, endpointCalls: {} }
           let evidence: CategoryEvidence = await this.evidence.collect(
@@ -453,7 +470,7 @@ export class CategoryAnalysisService {
               top_category: resolution?.candidates[0]?.categoryName ?? null,
               focus_rows: focusRows,
             }
-          const markdown = await this._generateReport(input)
+          const markdown = await this._generateReport(input, model?.publicId)
           reports.push({
             categoryId: category.nodeId,
             input,
@@ -467,7 +484,7 @@ export class CategoryAnalysisService {
         await this._saveProgress(record.id, record.userId, leaseToken, reports, "COMPLETED")
       } catch (error) {
         const message =
-          error instanceof HttpException ? error.message : "分析服务暂不可用，请稍后重试"
+          isUpstreamQuotaError(error) ? (quotaFailure(error, "not_charged", reports.length ? "partial" : "operation") as Error).message : error instanceof HttpException ? error.message : "分析服务暂不可用，请稍后重试"
         await this._saveProgress(record.id, record.userId, leaseToken, reports, "FAILED", message)
         this.logger.warn(`类目分析失败 id=${record.id}`)
       }
@@ -476,7 +493,8 @@ export class CategoryAnalysisService {
     }
   }
   private async _generateReport(
-    input: CategoryAnalysisInput
+    input: CategoryAnalysisInput,
+    model?: string
   ): Promise<string> {
     // 历史报告兼容字段留在存储层，给模型的协议只使用最新版字段。
     const promptJson = JSON.stringify(input, (key: string, value: unknown) =>
@@ -489,18 +507,18 @@ export class CategoryAnalysisService {
       const instruction = attempt
         ? "\n上次输出没有通过格式校验。请重新按原始数据生成完整报告：只使用六个规定的二级标题，末尾保留三级标题「数据核对」，不要加代码围栏、来源名、内部分数或禁用判断词。"
         : ""
-      for await (const event of this.gateway.streamChat(
+      for await (const event of streamBeforeQuotaCharge(this.gateway.streamChat(
         uiLanguage() === "en-US"
           ? withOutputLanguage(CATEGORY_ANALYSIS_SYSTEM_PROMPT) + `\nEnglish report contract: use exactly these six level-two headings in order: ${EN_SECTION_TITLES.join(" | ")}. End with the level-three heading Data Checks. Translate the recommendation to exactly: ${EN_ADVICE[input.diag.advice] ?? input.diag.advice}. Translate all explanatory values and missing-data placeholders to English. Do not output the Chinese section headings or recommendation labels.`
           : CATEGORY_ANALYSIS_SYSTEM_PROMPT,
         message + instruction,
         {
-          modelConfigKey: "AI_GATEWAY_CATEGORY_ANALYSIS_MODEL",
+          ...(model ? { model } : { modelConfigKey: "AI_GATEWAY_CATEGORY_ANALYSIS_MODEL" }),
           temperature: 0.2,
           operationName: "类目分析报告",
           resolveBilling: true,
         }
-      )) {
+      ), "operation")) {
         if (event.type === "text") markdown += event.content
         if (event.type === "billing" && event.billing) {
           hasBilling = true
@@ -551,6 +569,7 @@ export class CategoryAnalysisService {
       },
       { timeout: 30000 }
     )
+    if (status === "COMPLETED") await recordGenerationSuccess(this.prisma, "categoryAnalysisRecord", id)
   }
   private _summary(record: {
     id: number

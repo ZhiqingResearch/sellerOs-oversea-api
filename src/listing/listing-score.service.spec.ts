@@ -1,3 +1,4 @@
+jest.mock("../generation-record/generation-record-success", () => ({ recordGenerationSuccess: jest.fn().mockResolvedValue(undefined) }))
 import { INestApplication, Logger, ValidationPipe } from "@nestjs/common"
 import { Test } from "@nestjs/testing"
 import { BusinessAiRun, Prisma } from "@prisma/client"
@@ -7,16 +8,17 @@ import { join } from "node:path"
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard"
 import { PermissionsGuard } from "../auth/guards/permissions.guard"
 import { AiGatewayProvider } from "../common/providers/ai-gateway.provider"
+import { recordGenerationSuccess } from "../generation-record/generation-record-success"
 import { HistoryService } from "../history/history.service"
 import { PrismaService } from "../prisma/prisma.service"
 import { ListingAiPermissionGuard } from "./guards/listing-ai-permission.guard"
 import { ListingModelSelectionGuard } from "./guards/listing-model-selection.guard"
-import { buildListingScoreSystemPrompt } from "./listing-score-prompt"
 import { ListingAiService } from "./listing-ai.service"
 import { ListingDocumentService } from "./listing-document.service"
 import { ListingGenerationService } from "./listing-generation.service"
 import { ListingRunService } from "./listing-run.service"
 import * as images from "./listing-score-images"
+import { buildListingScoreSystemPrompt } from "./listing-score-prompt"
 import { ListingScoreService } from "./listing-score.service"
 import { ListingController } from "./listing.controller"
 
@@ -108,7 +110,9 @@ function fixture(outputs = [JSON.stringify(report)]) {
   const chargeSavedOutput = jest.fn().mockResolvedValue(null)
   const tx = {
     businessAiRun: table,
-    usageLog: { findUnique: jest.fn().mockResolvedValue({ id: 9 }) },
+    usageLog: {
+      findUnique: jest.fn().mockResolvedValue({ id: 9, credits: new Prisma.Decimal(20) }),
+    },
   }
   const prisma = {
     ...tx,
@@ -133,6 +137,50 @@ function fixture(outputs = [JSON.stringify(report)]) {
 describe("独立评分持久化、恢复与结算", () => {
   beforeEach(() => jest.spyOn(images, "prepareListingScoreImages").mockResolvedValue(undefined))
   afterEach(() => jest.restoreAllMocks())
+
+  it.each(["7.25", "0"])(
+    "将实际账单模型和实扣 %s 积分交给成功快照，重放不重复扣费",
+    async credits => {
+      const f = fixture()
+      const charged = new Prisma.Decimal(credits)
+      f.prisma.usageLog.findUnique.mockResolvedValue({ id: 9, credits: charged })
+      const capture = jest.mocked(recordGenerationSuccess)
+      capture.mockClear()
+      await f.service.complete(3, dto)
+      expect(capture).toHaveBeenCalledTimes(1)
+      expect(capture).toHaveBeenCalledWith(f.prisma, "businessAiRun", 1, {
+        modelPublicId: "ZQ-Think-Flash",
+        credits: charged,
+      })
+      expect(f.row().model).toBe("ZQ-Think-Pro")
+      expect(f.row().usageLogId).toBe(9)
+      await f.service.complete(3, dto)
+      expect(f.chargeSavedOutput).toHaveBeenCalledTimes(1)
+      expect(capture).toHaveBeenCalledTimes(1)
+    }
+  )
+
+  it("生成记录写入失败不回滚已完成评分或再次扣费", async () => {
+    const f = fixture()
+    const real = jest.requireActual<
+      typeof import("../generation-record/generation-record-success")
+    >("../generation-record/generation-record-success")
+    f.prisma.$transaction
+      .mockImplementationOnce(f.prisma.$transaction.getMockImplementation()!)
+      .mockRejectedValueOnce(new Error("GenerationRecord 写入失败"))
+    jest.mocked(recordGenerationSuccess).mockImplementationOnce(real.recordGenerationSuccess)
+    const log = jest.spyOn(Logger.prototype, "error").mockImplementation(() => undefined)
+    await expect(f.service.complete(3, dto)).resolves.toMatchObject({
+      text: JSON.stringify(report),
+    })
+    expect(f.row().status).toBe("COMPLETED")
+    expect(f.row().usageLogId).toBe(9)
+    expect(f.chargeSavedOutput).toHaveBeenCalledTimes(1)
+    expect(log).toHaveBeenCalledWith(
+      "成功快照保存失败 source=businessAiRun id=1",
+      expect.any(String)
+    )
+  })
 
   it("新CDQ规则差异不拦截，保留细则并按已有分数汇总，只调用一次及幂等结算", async () => {
     const raw = {

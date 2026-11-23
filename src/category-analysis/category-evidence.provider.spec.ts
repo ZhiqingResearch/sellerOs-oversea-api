@@ -1,4 +1,5 @@
 import { ConfigService } from "@nestjs/config"
+import { Prisma } from "@prisma/client"
 import axios from "axios"
 import { createHash } from "crypto"
 import { PrismaService } from "../prisma/prisma.service"
@@ -255,7 +256,10 @@ describe("SIF 十四天持久缓存", () => {
           where: { cacheKey: string }
           create: { payload: unknown; expiresAt: Date }
         }) => {
-          rows.set(where.cacheKey, create)
+          rows.set(where.cacheKey, {
+            ...create,
+            payload: create.payload === Prisma.JsonNull ? null : create.payload,
+          })
           return Promise.resolve(create)
         }
       ),
@@ -337,18 +341,246 @@ describe("SIF 十四天持久缓存", () => {
     expect(request).toHaveBeenCalledTimes(2)
   })
 
+  it.each(["asinsHistorySales"])(
+    "%s 跨批次、重启与大小写复用 ASIN，只补缺失商品且按各自到期时间刷新",
+    async endpoint => {
+      const { create } = persistentProviders()
+      const [firstAsin, secondAsin, thirdAsin] = details.map(row => row.asin)
+      const call = (provider: CategoryEvidenceProvider, asins: string[]) =>
+        provider["_sif"](endpoint, "US", { asins, month: 18 }, usageOf())
+      await call(create(), [firstAsin, secondAsin])
+      jest.setSystemTime(startedAt + 86400000)
+      const result = await call(create(), [secondAsin.toLowerCase(), thirdAsin, thirdAsin])
+      expect(request.mock.calls.map(([options]) => options.data!.asins)).toEqual([
+        [firstAsin, secondAsin],
+        [thirdAsin],
+      ])
+      if (endpoint === "batchAsinDetail") expect(result).toEqual(details.slice(1, 3))
+      else
+        expect(result).toEqual({
+          [secondAsin]: { "2026-01": 50, "2026-02": 100 },
+          [thirdAsin]: { "2026-01": 50, "2026-02": 100 },
+        })
+      jest.setSystemTime(startedAt + ttlMs)
+      await call(create(), [secondAsin, thirdAsin])
+      expect(request.mock.calls.at(-1)![0].data!.asins).toEqual([secondAsin])
+      expect(request).toHaveBeenCalledTimes(3)
+    }
+  )
+
+  it.each(["asinsHistorySales"])(
+    "%s 同进程并发交叠批次只查询一次共同 ASIN，真实请求分别计数",
+    async endpoint => {
+      const provider = persistentProviders().create()
+      const first = usageOf(),
+        second = usageOf()
+      const asins = details.slice(0, 3).map(row => row.asin)
+      await Promise.all([
+        provider["_sif"](endpoint, "US", { asins: asins.slice(0, 2) }, first),
+        provider["_sif"](endpoint, "US", { asins: asins.slice(1) }, second),
+      ])
+      expect(request.mock.calls.map(([options]) => options.data!.asins)).toEqual([
+        asins.slice(0, 2),
+        [asins[2]],
+      ])
+      expect(first.totalCalls).toBe(1)
+      expect(second.totalCalls).toBe(1)
+      expect(provider["asinBatchQueues"].size).toBe(0)
+    }
+  )
+
+  it.each(["asinsHistorySales"])(
+    "%s 拆分旧整批缓存不续期，拆出的子集跨重启可复用",
+    async endpoint => {
+      const { create, rows } = persistentProviders()
+      const payload = { asins: details.slice(0, 2).map(row => row.asin), month: 18 }
+      await create()["_requestSif"](endpoint, "US", payload, usageOf())
+      jest.setSystemTime(startedAt + ttlMs - 1)
+      await create()["_sif"](endpoint, "US", payload, usageOf())
+      await create()["_sif"](
+        endpoint,
+        "US",
+        { ...payload, asins: payload.asins.slice(0, 1) },
+        usageOf()
+      )
+      expect(request).toHaveBeenCalledTimes(1)
+      expect([...rows.values()].every(row => row.expiresAt.getTime() === startedAt + ttlMs)).toBe(
+        true
+      )
+      jest.setSystemTime(startedAt + ttlMs)
+      await create()["_sif"](endpoint, "US", payload, usageOf())
+      expect(request).toHaveBeenCalledTimes(2)
+    }
+  )
+
+  it.each(["asinsHistorySales"])(
+    "%s 成功缺数跨批次复用但不伪造记录，失败释放队列后可重试",
+    async endpoint => {
+      const { create, rows } = persistentProviders()
+      const provider = create(),
+        usage = usageOf()
+      const asins = details.slice(0, 2).map(row => row.asin)
+      request.mockResolvedValueOnce({ data: { code: -20 } })
+      await expect(provider["_sif"](endpoint, "US", { asins }, usage)).rejects.toThrow(
+        "数据未获取，未扣除积分"
+      )
+      expect(rows.size).toBe(0)
+      expect(usage.totalCalls).toBe(0)
+      expect(provider["asinBatchQueues"].size).toBe(0)
+      request.mockResolvedValueOnce({
+        data: { code: 1, data: endpoint === "batchAsinDetail" ? [] : {} },
+      })
+      await provider["_sif"](endpoint, "US", { asins }, usage)
+      const result = await create()["_sif"](endpoint, "US", { asins: asins.slice(1) }, usage)
+      expect(result).toEqual(endpoint === "batchAsinDetail" ? [] : {})
+      expect(request).toHaveBeenCalledTimes(2)
+      expect(usage.totalCalls).toBe(1)
+    }
+  )
+
   it("失败响应不落缓存不计费，下次可立即重试", async () => {
     const { create, rows } = persistentProviders()
     const provider = create(),
       usage = usageOf()
     request.mockResolvedValueOnce({ data: { code: -20 } })
     await expect(provider["_sif"]("category/suggestion", "US", {}, usage, true)).rejects.toThrow(
-      "配额"
+      "数据未获取，未扣除积分"
     )
     expect(rows.size).toBe(0)
     expect(usage.totalCalls).toBe(0)
     await provider["_sif"]("category/suggestion", "US", {}, usage, true)
     expect(request).toHaveBeenCalledTimes(2)
     expect(usage.totalCalls).toBe(1)
+  })
+
+  it("200个历史商品中每10个仅缺1个时，凑满缺失批次后只请求2次而非20次", async () => {
+    const { create } = persistentProviders()
+    const asins = Array.from({ length: 200 }, (_, index) => `B${String(index).padStart(9, "0")}`)
+    const missing = asins.filter((_, index) => index % 10 === 0)
+    const cached = asins.filter((_, index) => index % 10 !== 0)
+    await create()["_sif"]("asinsHistorySales", "US", { asins: cached, month: 18 }, usageOf())
+    request.mockClear()
+    const usage = usageOf()
+    const history = await create()["_sif"]("asinsHistorySales", "US", { asins, month: 18 }, usage)
+    expect(Object.keys(history as object)).toHaveLength(200)
+    expect(request.mock.calls.map(([options]) => options.data!.asins)).toEqual([
+      missing.slice(0, 10),
+      missing.slice(10),
+    ])
+    expect(usage.totalCalls).toBe(2)
+  })
+
+  it("详情保留供应商返回顺序，不因请求ASIN顺序重排并列销量商品", async () => {
+    const provider = persistentProviders().create()
+    const products = [...details].reverse()
+    request.mockResolvedValueOnce({ data: { code: 1, data: { list: products } } })
+    const payload = { asins: details.map(row => row.asin) }
+    const first = await provider["_sif"]("batchAsinDetail", "US", payload, usageOf())
+    const cached = await provider["_sif"]("batchAsinDetail", "US", payload, usageOf())
+    expect(first).toEqual({ list: products })
+    expect(cached).toEqual(first)
+    expect(request).toHaveBeenCalledTimes(1)
+  })
+
+  it("历史显式null保留键，未返回的ASIN不补键，跨重启仍区分", async () => {
+    const { create } = persistentProviders()
+    const asins = details.slice(0, 2).map(row => row.asin)
+    request.mockResolvedValueOnce({ data: { code: 1, data: { [asins[0]]: null } } })
+    const first = await create()["_sif"]("asinsHistorySales", "US", { asins, month: 18 }, usageOf())
+    const cached = await create()["_sif"](
+      "asinsHistorySales",
+      "US",
+      { asins, month: 18 },
+      usageOf()
+    )
+    expect(first).toEqual({ [asins[0]]: null })
+    expect(cached).toEqual(first)
+    expect(request).toHaveBeenCalledTimes(1)
+  })
+
+  it("完整历史任务仍复用旧版按10个分组的整批缓存，不因重分组重新取数", async () => {
+    const { create } = persistentProviders()
+    const asins = details.slice(0, 25).map(row => row.asin)
+    for (let index = 0; index < asins.length; index += 10)
+      await create()["_requestSif"](
+        "asinsHistorySales",
+        "US",
+        { asins: asins.slice(index, index + 10), month: 18 },
+        usageOf()
+      )
+    request.mockClear()
+    const history = await create()["_sif"](
+      "asinsHistorySales",
+      "US",
+      { asins, month: 18 },
+      usageOf()
+    )
+    expect(Object.keys(history as object)).toHaveLength(25)
+    expect(request).not.toHaveBeenCalled()
+  })
+
+  it("历史分批失败保留成功及缓存数据，再次执行只补失败批次", async () => {
+    const { create } = persistentProviders()
+    const asins = details.slice(0, 25).map(row => row.asin)
+    const onBatchError = jest.fn()
+    request.mockImplementationOnce(respond).mockRejectedValueOnce(new Error("network"))
+    const history = await create()["_sifAsins"](
+      "asinsHistorySales",
+      "US",
+      asins,
+      { month: 18 },
+      usageOf(),
+      onBatchError
+    )
+    expect(Object.keys(history as object)).toEqual([...asins.slice(0, 10), ...asins.slice(20)])
+    expect(onBatchError).toHaveBeenCalledTimes(1)
+    request.mockClear()
+    const complete = await create()["_sif"](
+      "asinsHistorySales",
+      "US",
+      { asins, month: 18 },
+      usageOf()
+    )
+    expect(Object.keys(complete as object)).toHaveLength(25)
+    expect(request).toHaveBeenCalledTimes(1)
+    expect(request.mock.calls[0][0].data!.asins).toEqual(asins.slice(10, 20))
+  })
+
+  it("并发交叠关键词只取缺失词，同时保留请求原文及响应行", async () => {
+    const provider = persistentProviders().create()
+    const first = usageOf(),
+      second = usageOf()
+    const responses = await Promise.all([
+      provider["_keywordBatch"](
+        "batchKeywordSimpleOverview",
+        "US",
+        ["SpIce   Rack", "storage"],
+        {},
+        first
+      ),
+      provider["_keywordBatch"](
+        "batchKeywordSimpleOverview",
+        "US",
+        ["storage", "shelf"],
+        {},
+        second
+      ),
+    ])
+    expect(request.mock.calls.map(([options]) => options.data!.keywords)).toEqual([
+      ["SpIce   Rack", "storage"],
+      ["shelf"],
+    ])
+    expect(responses).toEqual([
+      [
+        { keyword: "SpIce   Rack", estSearchesNum: 12000 },
+        { keyword: "storage", estSearchesNum: 12000 },
+      ],
+      [
+        { keyword: "storage", estSearchesNum: 12000 },
+        { keyword: "shelf", estSearchesNum: 12000 },
+      ],
+    ])
+    expect(first.totalCalls + second.totalCalls).toBe(2)
+    expect(provider["keywordBatchQueues"].size).toBe(0)
   })
 })

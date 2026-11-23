@@ -4,6 +4,7 @@ import {
   Get,
   Header,
   Param,
+  ParseIntPipe,
   ParseUUIDPipe,
   Patch,
   Post,
@@ -35,6 +36,7 @@ import { ListingDocumentService } from "./listing-document.service"
 import { ListingGenerationService } from "./listing-generation.service"
 import { ListingRunService } from "./listing-run.service"
 import { ListingScoreService } from "./listing-score.service"
+import { CreateListingOptimizationDto, RetryListingOptimizationScoreDto } from "./dto/listing-optimization.dto"
 
 interface AuthedRequest {
   user: { id: number }
@@ -61,6 +63,32 @@ export class ListingController {
   @ApiOperation({ summary: "提交持久化生成任务，同一 attemptId 至多一次模型调用" })
   submitGeneration(@Request() request: AuthedRequest, @Body() dto: CreateListingGenerationDto) {
     return this.generationService.submit(request.user.id, dto)
+  }
+
+  @Post("history/:id/optimizations")
+  @RequirePermissions("tool.listing_generate")
+  @ApiOperation({ summary: "优化当前历史方案并重新评分，仅采纳不低于原分的结果（合计5积分，含自动评分）" })
+  submitOptimization(
+    @Request() request: AuthedRequest,
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: CreateListingOptimizationDto
+  ) {
+    return this.generationService.submitOptimization(request.user.id, id, dto)
+  }
+
+  @Post("generations/:attemptId/retry-score")
+  @RequirePermissions("tool.listing_generate")
+  @ApiOperation({ summary: "仅重试失败评分：汽配整单成功结算25积分；优化候选采纳后结算5积分" })
+  retryOptimizationScore(
+    @Request() request: AuthedRequest,
+    @Param("attemptId", new ParseUUIDPipe()) attemptId: string,
+    @Body() dto: RetryListingOptimizationScoreDto
+  ) {
+    return this.generationService.retryOptimizationScore(
+      request.user.id,
+      attemptId,
+      dto.retryRequestId
+    )
   }
 
   @Get("runs/:runId/generations")

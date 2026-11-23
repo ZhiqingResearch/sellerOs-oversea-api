@@ -1,3 +1,4 @@
+import { isQuotaResponse, isUpstreamQuotaError } from "../../common/errors/upstream-quota"
 import { gatewayImageDimensions } from "../../common/utils/generation-metadata";
 // Gateway 图片适配器（2026-09-10 起走 callback 模式）：提交带 callback:true，
 // 终态以网关 image.task 回调为主信号（webhook → AiGatewayImageCallbacksService
@@ -201,7 +202,8 @@ async function waitForTerminalTask(
 }
 
 /** 网关终态 → RelayError(走 core 的重试分类与用户文案)。 */
-function terminalTaskError(task: ImageTask): RelayError {  if (task.status === "expired") {
+function terminalTaskError(task: ImageTask): RelayError {
+  if (task.status === "expired") {
     return new RelayError(
       "transient_timeout",
       friendlyMessage("transient_timeout"),
@@ -228,7 +230,7 @@ function terminalTaskError(task: ImageTask): RelayError {  if (task.status === "
       `gateway task failed: ${task.id} type=${err?.type ?? "unknown"} code=${err?.code ?? "unknown"} message=${err?.message ?? ""}`,
     );
   }
-  const kind =
+  const kind = isQuotaResponse(err) ? "permanent_quota" :
     err?.type === "invalid_request_error"
       ? "permanent_validation"
       : "transient_server";
@@ -243,7 +245,7 @@ function terminalTaskError(task: ImageTask): RelayError {  if (task.status === "
 function gatewayCallError(action: string, err: unknown): RelayError {
   if (err instanceof RelayError) return err;
   const status = err instanceof HttpException ? err.getStatus() : undefined;
-  const kind = classifyHttpStatus(status ?? 0);
+  const kind = isUpstreamQuotaError(err) ? "permanent_quota" : classifyHttpStatus(status ?? 0);
   const details = `${action}: ${err instanceof Error ? err.message : String(err)}`;
   return new RelayError(kind, friendlyMessage(kind), details, status);
 }

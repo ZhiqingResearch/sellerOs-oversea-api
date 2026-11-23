@@ -1,3 +1,4 @@
+import { isUpstreamQuotaError, quotaFailure, quotaTaskMessage } from "../common/errors/upstream-quota"
 import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common"
 import { AiModelExecMode, AiModelModality, Prisma } from "@prisma/client"
 import { Decimal } from "@prisma/client/runtime/library"
@@ -138,14 +139,14 @@ export class InternalGenerationService {
       this.logger.error(
         `[内部生成] Gateway 提交失败 task=${task.id}: ${error instanceof Error ? error.message : String(error)}`
       )
-      // 与本平台提交同语义：仅网关明确拒绝（400/404）终态化并抛出；
-      // 429/5xx/超时保留 GENERATING，等启动恢复按行 source 用 vidflowos Key 重提
-      if (error instanceof BadRequestException) {
+      // 与本平台提交同语义：仅网关明确拒绝（参数错误/模型下架/明确额度耗尽）终态化并抛出；
+      // 普通 429/5xx/超时保留 GENERATING，等启动恢复按行 source 用 vidflowos Key 重提
+      if (error instanceof BadRequestException || isUpstreamQuotaError(error)) {
         await this.prisma.videoTask.updateMany({
           where: { id: task.id, status: "GENERATING", deletedAt: null },
-          data: { status: "FAILED", errorMessage: "AI Gateway 视频任务提交失败" },
+          data: { status: "FAILED", errorMessage: quotaTaskMessage(error, "not_charged", "AI Gateway 视频任务提交失败", "item") },
         })
-        throw error
+        throw quotaFailure(error, "not_charged", "item")
       }
     }
 

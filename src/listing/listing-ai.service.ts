@@ -1,3 +1,4 @@
+import { beforeQuotaCharge, streamBeforeQuotaCharge } from "../common/errors/upstream-quota"
 import { BadGatewayException, BadRequestException, Injectable } from "@nestjs/common"
 import { Prisma } from "@prisma/client"
 import { withOutputLanguage } from "../common/i18n/ai-language"
@@ -80,7 +81,7 @@ export class ListingAiService {
         const userContent = await this._prepareImages(dto)
         const isDataValid =
           dto.operation === "attribute_analysis" ? isValidAttributeAnalysisResponse : isRecord
-        const result = await this.aiGatewayProvider.generateJson<Record<string, unknown>>(
+        const result = await beforeQuotaCharge(this.aiGatewayProvider.generateJson<Record<string, unknown>>(
           buildListingImageSystemPrompt(dto.operation === "score" ? buildListingScoreSystemPrompt(dto.systemPrompt, dto.userPrompt) : dto.systemPrompt ?? "", dto.images),
           dto.userPrompt,
           {
@@ -98,13 +99,14 @@ export class ListingAiService {
                 ? "顶层对象必须包含 questions 数组；每项必须包含非空 id、title、hint、multiSelect=true，以及非空 options 数组。"
                 : undefined,
           }
-        )
+        ), "step")
         const resultText = dto.operation === "score"
           ? this._prepareScoreOutput(JSON.stringify(result.data), dto)
           : JSON.stringify(result.data)
         this._validateListingOutput(dto.operation, resultText, dto.listingMarket)
         const charge = (tx?: Prisma.TransactionClient) =>
-          result.billing && (dto.operation !== "score" || typeof JSON.parse(resultText).total === "number")
+          result.billing &&
+          (dto.operation !== "score" || typeof JSON.parse(resultText).total === "number")
             ? this.chargeSavedOutput(
                 userId,
                 dto.operation,
@@ -150,7 +152,7 @@ export class ListingAiService {
       let billing: AiGatewayBillingUsage | undefined
       const userContent = await this._prepareImages(dto)
       let tokenUsage: AiGatewayTokenUsage | undefined
-      const gatewayStream = this.aiGatewayProvider.streamChat(
+      const gatewayStream = streamBeforeQuotaCharge(this.aiGatewayProvider.streamChat(
         buildListingImageSystemPrompt(dto.operation === "score" ? buildListingScoreSystemPrompt(dto.systemPrompt, dto.userPrompt) : dto.systemPrompt ?? "", dto.images),
         dto.userPrompt,
         {
@@ -162,7 +164,7 @@ export class ListingAiService {
           maxOutputTokens: dto.maxOutputTokens,
           resolveBilling: true,
         }
-      )
+      ), "step")
 
       for await (const event of gatewayStream) {
         if (event.type === "usage" && event.usage) {
@@ -210,11 +212,19 @@ export class ListingAiService {
   }
 
   private _prepareScoreOutput(text: string, dto: ListingAiInvocationDto): string {
-    const deliveryText = prepareListingScoreDelivery(text, dto.scoreMarket ?? dto.listingMarket ?? "amazon_us", {
-      sourceFacts: parseListingScoreSource(dto.userPrompt),
-      ...(dto.images?.some(image => image.role === "main")
-        ? { confirmedSecondaryCount: dto.images.filter(image => image.role === "secondary").length } : {}),
-    })
+    const deliveryText = prepareListingScoreDelivery(
+      text,
+      dto.scoreMarket ?? dto.listingMarket ?? "amazon_us",
+      {
+        sourceFacts: parseListingScoreSource(dto.userPrompt),
+        ...(dto.images?.some(image => image.role === "main")
+          ? {
+              confirmedSecondaryCount: dto.images.filter(image => image.role === "secondary")
+                .length,
+            }
+          : {}),
+      }
+    )
     if (!deliveryText) throw new BadGatewayException("AI 未返回评分内容，本次评分未扣费")
     return deliveryText
   }
@@ -251,6 +261,14 @@ export class ListingAiService {
     if (operation === "long_title" || operation === "qa_rewrite") return
     return this.usageService.assertFixedModuleAffordable(
       userId, operation === "score" ? "listing.score" : "listing.generate", operation, generationBillingId
+    )
+  }
+
+  async assertOptimizationAffordable(userId: number) {
+    return this.usageService.assertFixedModuleAffordable(
+      userId,
+      "listing.generate",
+      "optimization"
     )
   }
 

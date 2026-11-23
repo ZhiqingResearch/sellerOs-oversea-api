@@ -25,16 +25,22 @@ export class ListingModelSelectionGuard implements CanActivate {
     )
     if (!hasInternalModel) return true
 
+    await this.assertAllowed(request.user?.id, models)
+    return true
+  }
+
+  async assertAllowed(userId: number | undefined, models: unknown[]) {
+    if (!models.some(model => INTERNAL_LISTING_AI_MODELS.some(value => value === model))) return
+
     const role =
-      request.user &&
+      userId &&
       (await this.prisma.userRole.findFirst({
         where: {
-          userId: request.user.id,
+          userId,
           role: { name: { in: ["运营专员（内部）", "运营专员(内部)"] } },
         },
         select: { roleId: true },
       }))
     if (!role) throw new ForbiddenException("仅运营专员（内部）可选择该 Listing 模型")
-    return true
   }
 }

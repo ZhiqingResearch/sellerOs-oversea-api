@@ -17,6 +17,15 @@ export const PERMISSION_GROUPS: { code: string; label: string; sortOrder: number
 ]
 
 export const PERMISSIONS: PermissionSeed[] = [
+  {
+    key: "tool.patent_query",
+    label: "产品专利查询",
+    groupCode: "tools",
+    parentKey: "tool.market_research",
+    route: "/patent-query",
+    subRoutes: null,
+    sortOrder: 0,
+  },
   { key: "tool.market_research", label: "市场前调", groupCode: "tools", parentKey: null, route: null, subRoutes: null, sortOrder: 0 },
   { key: "tool.category_analysis", label: "类目分析", groupCode: "tools", parentKey: "tool.market_research", route: "/category-analysis", subRoutes: ["/selection-analysis-records"], sortOrder: 0 },
   // ===== tools =====

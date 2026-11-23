@@ -51,6 +51,8 @@ function formatScoreContext(score: AuditScoreResult): string {
 
   // 评分结果已暂时下线 trafficSuggestions 字段（前端不展示该板块）；优化选词原料改为现场构建，注入内容不变。
   const trafficLines = (buildTrafficSuggestionsFromPrecompute(score.trafficPrecompute) ?? []).map(block => {
+    const item = score.boards.flatMap(board => board.items).find(item => item.id === block.ruleId)
+    if (item?.status === "pending" || block.level === "pending") return `#### ${block.ruleId}：⏸ 证据不足，本次不评分，不得推测扣分或套用旧分档。`
     const head = `#### ${block.ruleId} ${block.subDimension}：${block.summary}（扣 ${block.deducted}/${block.maxScore}，${block.level}）`
     const positionRows = (block.positionTable ?? []).map(
       row =>
@@ -97,7 +99,7 @@ ASIN：${asin}
 `
 
   prompt += buildAuditEvidenceCards(evidence)
-  prompt += cardSection("第二步 · 十板块打分结果（优化输入，含待核项）", formatScoreContext(score))
+  prompt += cardSection("第二步 · 十板块打分结果（优化输入，含待核项）", formatScoreContext({ ...score, trafficPrecompute: evidence.D.trafficPrecompute ?? score.trafficPrecompute }))
 
   prompt += `\n请基于以上六卡证据与十板块打分结果，严格按 system prompt 输出 AuditOptimizeResult JSON。优化动作必须由诊断结论倒推（标注来源规则 ID 与扣分、给预期收益区间），不设图片/模块数量目标，仅输出 JSON。选词与改写遵守禁词红线（促销词 / 他人型号裸写 / 竞品品牌词一律不进 listing，兼容前缀表述除外）、埋词去重（标题已覆盖语义的词改埋 Bullet/QA/评论/描述）与广告建议闸门（先看 D 卡 ranking 广告位，无排名才建议开投/调价）。`
   prompt += `\nlisting.title、listing.longTitle、listing.itemHighlights、listing.bullets 的标签与完整正文、listing.description、listing.searchTerms、listing.qaCandidates 的问题和回答、fieldRewrites.rewritten 均须按上述目标商品文案语言书写，直接面向买家。不得把“针对核心词优化”“解决某项扣分”等诊断说明放进商品正文；这些理由只能放在 fieldRewrites.reason 或 improvementPriorities 等说明字段。`

@@ -41,6 +41,15 @@ export class ImageTemplateService {
   async findAll(query: QueryImageTemplateDto, userId: number) {
     const { page = 1, pageSize = 10, tab = "all", groupId, tag, keyword } = query
 
+    // JSON 数组逐标签匹配；转义通配符，避免把用户输入的 % / _ 当作匹配规则。
+    const tagMatches = keyword
+      ? await this.prisma.$queryRaw<{ id: number }[]>`
+          SELECT id FROM ImageTemplate
+          WHERE deletedAt IS NULL AND (isSystem = true OR userId = ${userId})
+            AND JSON_SEARCH(tags, 'one', ${`%${keyword.replace(/[!%_]/g, "!$&")}%`}, '!', '$[*]') IS NOT NULL
+        `
+      : []
+
     const where: Prisma.ImageTemplateWhereInput = {
       AND: [
         this.visibilityClause(tab, userId),
@@ -52,6 +61,8 @@ export class ImageTemplateService {
                 { name: { contains: keyword } },
                 { note: { contains: keyword } },
                 { items: { some: { prompt: { contains: keyword } } } },
+                { group: { name: { contains: keyword } } },
+                { id: { in: tagMatches.map(row => row.id) } },
               ],
             }
           : {},

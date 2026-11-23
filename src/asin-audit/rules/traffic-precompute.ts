@@ -3,7 +3,6 @@ import type {
   BsrTrendPrecompute,
   OpportunityKeyword,
   PositionAllocationRow,
-  TrafficPrecompute,
   TrafficStructure,
   TrafficTierBuckets,
 } from "../types/de.types"
@@ -197,7 +196,7 @@ function isOpportunity(r: KwDerived): boolean {
 export function computeTrafficPrecompute(
   list: SifAsinKeywordRow[],
   overviewList: SifKeywordOverviewRow[]
-): TrafficPrecompute {
+) {
   const { kept: keptKeywords, dropped } = filterForbiddenKeywords(list.map(k => k.keyword))
   const keptSet = new Set(keptKeywords)
   const cleanList = list.filter(k => keptSet.has(k.keyword))

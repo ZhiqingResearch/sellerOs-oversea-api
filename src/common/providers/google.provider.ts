@@ -1,3 +1,4 @@
+import { isQuotaResponse, UpstreamQuotaError } from "../errors/upstream-quota"
 import { GenerateVideosOperation, GoogleGenAI } from "@google/genai"
 import { Injectable, Logger } from "@nestjs/common"
 import { ConfigService } from "@nestjs/config"
@@ -117,6 +118,10 @@ export class GoogleProvider {
       })
       return response.text ?? null
     } catch (error: unknown) {
+      if (isQuotaResponse(error)) {
+        this.logger.warn("供方额度耗尽 provider=google operation=generateText")
+        throw new UpstreamQuotaError("google")
+      }
       const message = error instanceof Error ? error.message : String(error)
       this.logger.error(`Gemini 调用失败: ${message}`)
       return null
@@ -136,6 +141,10 @@ export class GoogleProvider {
       })
       return response.text ?? null
     } catch (error: unknown) {
+      if (isQuotaResponse(error)) {
+        this.logger.warn("供方额度耗尽 provider=google operation=generateTextWithSearch")
+        throw new UpstreamQuotaError("google")
+      }
       const message = error instanceof Error ? error.message : String(error)
       this.logger.error(`Gemini (with search) 调用失败: ${message}`)
       return null
@@ -187,6 +196,10 @@ export class GoogleProvider {
         await new Promise(resolve => setTimeout(resolve, 10000))
       }
     } catch (error: unknown) {
+      if (isQuotaResponse(error)) {
+        this.logger.warn("供方额度耗尽 provider=google operation=deepSearch")
+        throw new UpstreamQuotaError("google")
+      }
       const message = error instanceof Error ? error.message : String(error)
       const stack = error instanceof Error ? error.stack : ""
       this.logger.error(`Deep Research 调用失败: ${message}`, stack)
@@ -247,6 +260,10 @@ export class GoogleProvider {
       this.logger.warn("Gemini 响应中未找到图片数据")
       return null
     } catch (error: unknown) {
+      if (isQuotaResponse(error)) {
+        this.logger.warn("供方额度耗尽 provider=google operation=generateImage")
+        throw new UpstreamQuotaError("google")
+      }
       const message = error instanceof Error ? error.message : String(error)
       this.logger.error(`Gemini 生图失败: ${message}`)
       return null
@@ -303,6 +320,10 @@ export class GoogleProvider {
       this.logger.log(`  [Veo] 任务已提交 operation=${operation.name ?? "unknown"}`)
       return operation
     } catch (error: unknown) {
+      if (isQuotaResponse(error)) {
+        this.logger.warn("供方额度耗尽 provider=google operation=startVideoGeneration")
+        throw new UpstreamQuotaError("google")
+      }
       const message = error instanceof Error ? error.message : String(error)
       this.logger.error(`Veo 启动失败: ${message}`)
       return null
@@ -443,6 +464,10 @@ export class GoogleProvider {
       this.logger.log(`  [Veo] 任务已提交 operation=${operation.name}`)
       return { id: operation.name }
     } catch (error: unknown) {
+      if (isQuotaResponse(error)) {
+        this.logger.warn("供方额度耗尽 provider=google operation=submitVeo")
+        throw new UpstreamQuotaError("google")
+      }
       this.logger.error(`  [Veo] 提交原始错误 model=${model}: ${this.rawJson(error)}`)
       const message = error instanceof Error ? error.message : String(error)
       this.logger.error(`Veo 启动失败 model=${model}: ${message}`)

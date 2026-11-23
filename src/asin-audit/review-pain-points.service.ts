@@ -1,3 +1,4 @@
+import { streamBeforeQuotaCharge } from "../common/errors/upstream-quota"
 import { BadGatewayException, Injectable, Logger } from "@nestjs/common"
 import { uiLanguage, uiText } from "../common/i18n/request-language"
 import { AiGatewayProvider } from "../common/providers/ai-gateway.provider"
@@ -128,12 +129,12 @@ export class ReviewPainPointsService {
     let textBuffer = ""
     let tokenUsage: TokenUsage | null = null
     let billing: { costCny: string; requestId: string; requestIds: string[] } | undefined
-    for await (const event of this.gateway.streamChat(systemPrompt, userPrompt, {
+    for await (const event of streamBeforeQuotaCharge(this.gateway.streamChat(systemPrompt, userPrompt, {
       model: dto.model,
       temperature: 0,
       operationName: `ASIN 审计${asinAuditActionLabel("review-pain-points")}`,
       resolveBilling: true,
-    })) {
+    }), "operation")) {
       if (event.type === "text") {
         textBuffer += event.content
         continue

@@ -10,6 +10,7 @@ import { OpenApiApp } from "@prisma/client"
 import { createHash, createHmac, timingSafeEqual } from "crypto"
 import { PrismaService } from "../prisma/prisma.service"
 import { OPEN_API_KEYB_SIGNATURE } from "./open-api-keyb-signature.decorator"
+import { auditSignatureTime, authenticateAuditRequest } from "./asin-audit-request-queue"
 
 /** 签名时间戳允许的最大偏差（防重放窗口）：±5 分钟 */
 export const OPEN_SIGN_WINDOW_MS = 5 * 60 * 1000
@@ -53,6 +54,10 @@ export class OpenApiAuthGuard implements CanActivate {
     ) {
       return this.authenticateKeyb(req)
     }
+    return authenticateAuditRequest(req, () => this._authenticateSignedRequest(req))
+  }
+
+  private async _authenticateSignedRequest(req: OpenRequest) {
     const header = (k: string) => {
       const v = req.headers[k]
       return Array.isArray(v) ? v[0] : v
@@ -65,7 +70,7 @@ export class OpenApiAuthGuard implements CanActivate {
       throw new UnauthorizedException("缺少签名请求头（x-app-id / x-timestamp / x-nonce / x-sign）")
     }
     const ts = Number(timestamp)
-    if (!Number.isFinite(ts) || Math.abs(Date.now() - ts) > OPEN_SIGN_WINDOW_MS) {
+    if (!Number.isFinite(ts) || Math.abs(auditSignatureTime(req) - ts) > OPEN_SIGN_WINDOW_MS) {
       throw new UnauthorizedException("签名时间戳过期或非法")
     }
     const app = await this.prisma.openApiApp.findUnique({ where: { appId } })

@@ -1,3 +1,4 @@
+import { isUpstreamQuotaError } from "../errors/upstream-quota"
 import { BadGatewayException, Logger } from "@nestjs/common"
 import { ConfigService } from "@nestjs/config"
 import { withUiLanguage } from "../i18n/request-language"
@@ -504,4 +505,20 @@ describe("AiGatewayProvider", () => {
     expect(debugOutput).toContain('"content": "{\\"ok\\":true}"')
     expect(debugOutput).not.toContain("test-key")
   })
+  it.each(["json", "stream"])("%s 保留明确 quota，普通 429 仍是限流", async method => {
+    for (const code of ["insufficient_quota", "rate_limit_exceeded"]) {
+      mockedFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+        error: { code, type: code, message: code },
+      }), { status: 429, headers: { "content-type": "application/json" } }))
+      const provider = new AiGatewayProvider(config)
+      let caught: unknown
+      try {
+        if (method === "json") await provider.generateJson("system", "user")
+        else for await (const event of provider.streamChat("system", "user")) void event
+      } catch (error) { caught = error }
+      expect(isUpstreamQuotaError(caught)).toBe(code === "insufficient_quota")
+      expect(caught).toMatchObject({ status: 429 })
+    }
+  })
+
 })

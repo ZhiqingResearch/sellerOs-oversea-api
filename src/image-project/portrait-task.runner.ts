@@ -1,3 +1,4 @@
+import { isUpstreamQuotaError, quotaTaskMessage } from "../common/errors/upstream-quota"
 import {
   BadGatewayException,
   GatewayTimeoutException,
@@ -33,14 +34,14 @@ export class PortraitTaskRunner implements OnModuleInit {
       },
       select: { id: true },
     })
-    for (const task of tasks) void this.run(task.id)
+    for (const task of tasks) void this.run(task.id, true)
   }
 
   /**
    * 只负责将本地人像任务提交给 AI Gateway 并建立关联。
    * 任务终态完全由 Gateway 回调更新，这里不会查询或轮询远端任务状态。
    */
-  async run(taskId: number): Promise<void> {
+  async run(taskId: number, recovering = false): Promise<void> {
     try {
       const task = await this.prisma.generationTask.findUnique({
         where: { id: taskId },
@@ -106,8 +107,8 @@ export class PortraitTaskRunner implements OnModuleInit {
       })
       this.logger.log(`[人像生成] Gateway 任务已关联 task=${task.id} gatewayTask=${result.jobId}`)
     } catch (error) {
-      const message = this.errorMessage(error)
-      if (error instanceof BadGatewayException || error instanceof GatewayTimeoutException) {
+      const message = quotaTaskMessage(error, recovering ? "unknown" : "not_charged", this.errorMessage(error), "item")
+      if (error instanceof BadGatewayException || error instanceof GatewayTimeoutException || (recovering && isUpstreamQuotaError(error))) {
         this.logger.warn(
           `[人像生成] Gateway 提交结果不确定，保留任务等待回调或启动恢复 task=${taskId}: ${message}`
         )

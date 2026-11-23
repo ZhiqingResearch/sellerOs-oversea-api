@@ -1,3 +1,5 @@
+import { recordGenerationSuccess } from "../generation-record/generation-record-success"
+import { beforeQuotaCharge, quotaFailure } from "../common/errors/upstream-quota"
 import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common"
 import { Decimal } from "@prisma/client/runtime/library"
 import { ApifyMediaItem, ApifyProvider } from "../common/providers/apify.provider"
@@ -114,11 +116,13 @@ export class InspirationRadarService {
       if (platform === "TIKTOK") fetches.push(this.apify.searchTikTok(searchKeywords, count))
     }
 
-    const results = (await Promise.all(fetches)).flat()
+    const results = (await beforeQuotaCharge(Promise.all(fetches))).flat()
 
-    await this.chargeApifyCost(userId, results, { id: sub.id, name: sub.name })
-
-    await this.prisma.$transaction(async tx => {
+    const charge = await this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM InspirationSubscription WHERE id = ${id} FOR UPDATE`
+      const current = await tx.inspirationSubscription.findUniqueOrThrow({ where: { id } })
+      const refreshedAt = new Date(Math.max(Date.now(), (current.lastRefreshedAt?.getTime() ?? 0) + 1))
+      const charge = await this.chargeApifyCost(userId, results, { id: sub.id, name: sub.name }, refreshedAt)
       await tx.inspirationItem.deleteMany({ where: { subscriptionId: id } })
       if (results.length > 0) {
         await tx.inspirationItem.createMany({
@@ -144,9 +148,12 @@ export class InspirationRadarService {
       }
       await tx.inspirationSubscription.update({
         where: { id },
-        data: { lastRefreshedAt: new Date() },
+        data: { lastRefreshedAt: refreshedAt },
       })
+      return charge
     })
+
+    await recordGenerationSuccess(this.prisma, "inspirationSubscription", id, { credits: charge })
 
     this.logger.log(
       `[InspirationRadar] 刷新完成 subId=${id} 结果数=${results.length}`
@@ -160,7 +167,7 @@ export class InspirationRadarService {
       where: { userId },
       select: { id: true },
     })
-    const results = await Promise.all(subs.map(s => this.refresh(s.id, userId)))
+    const results = await Promise.all(subs.map(s => this.refresh(s.id, userId))).catch(error => { throw quotaFailure(error, "unknown", "partial") })
     return { refreshed: subs.length, totalItems: results.reduce((a, r) => a + r.length, 0) }
   }
 
@@ -182,9 +189,10 @@ export class InspirationRadarService {
   private async chargeApifyCost(
     userId: number,
     results: ApifyMediaItem[],
-    subscription: { id: number; name: string }
+    subscription: { id: number; name: string },
+    refreshedAt: Date
   ) {
-    if (results.length === 0) return
+    if (results.length === 0) return new Decimal(0)
 
     let totalCostCny = new Decimal(0)
     const breakdown: Record<string, number> = {}
@@ -196,10 +204,11 @@ export class InspirationRadarService {
     }
 
     if (totalCostCny.greaterThan(0)) {
-      await this.usage.deductCustom(userId, totalCostCny, {
+      const charge = await this.usage.deductCustom(userId, totalCostCny, {
         source: "inspiration_radar.refresh",
         meta: {
           subscriptionId: subscription.id,
+          refreshedAt: refreshedAt.toISOString(),
           subscriptionName: subscription.name,
           resultCount: results.length,
           breakdown,
@@ -208,7 +217,9 @@ export class InspirationRadarService {
       this.logger.log(
         `[InspirationRadar] 扣费 userId=${userId} cost=¥${totalCostCny.toFixed(4)} items=${results.length}`
       )
+      return charge.creditsCharged
     }
+    return new Decimal(0)
   }
 
   /**

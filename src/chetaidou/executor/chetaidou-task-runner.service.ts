@@ -1,5 +1,7 @@
 import { savedUiLanguage } from "../../common/i18n/ai-language"
 import { withUiLanguage } from "../../common/i18n/request-language"
+import { recordGenerationSuccess } from "../../generation-record/generation-record-success"
+import { isUpstreamQuotaError, quotaFailure, quotaMessage, UPSTREAM_QUOTA_CODE } from "../../common/errors/upstream-quota"
 // 车泰斗素材工作台 — 文本任务执行器（方案 §6/§7）
 // BREAKDOWN/IDEATION/REFRESH_GROUP/DIVERGE/COMPOSE 的推进：
 // DB 排队扫描 + 状态 CAS + Call 账本（先落库再调模型）+ 校验通过后结算。
@@ -231,7 +233,7 @@ export class ChetaidouTaskRunnerService implements OnModuleInit {
           ? "CALL_STATUS_UNKNOWN"
           : error instanceof GatewayTimeoutException
             ? "PROVIDER_TIMEOUT"
-            : "PROVIDER_ERROR",
+            : isUpstreamQuotaError(error) ? UPSTREAM_QUOTA_CODE : "PROVIDER_ERROR",
         error instanceof UnknownCallError ? "模型调用状态待核对，请勿重复提交" : message
       ).catch(() => undefined)
     } finally {
@@ -348,6 +350,13 @@ export class ChetaidouTaskRunnerService implements OnModuleInit {
     try {
       result = await this.gateway.completeMultimodal(frozenRequest, undefined, true)
     } catch (error) {
+      if (isUpstreamQuotaError(error)) {
+        await this.prisma.chetaidouCall.update({ where: { id: callId }, data: {
+          state: "FINISHED", outcome: "PROVIDER_FAILED", billingStatus: "FREE",
+          errorCode: UPSTREAM_QUOTA_CODE, errorMessage: quotaMessage("not_charged", "step"), finishedAt: new Date(),
+        } })
+        throw quotaFailure(error, "not_charged", "step")
+      }
       if (error instanceof GatewayTimeoutException) {
         await this.prisma.chetaidouCall.update({
           where: { id: callId },
@@ -852,7 +861,7 @@ export class ChetaidouTaskRunnerService implements OnModuleInit {
               ? "PROVIDER_TIMEOUT"
               : error instanceof OutputApplyError
                 ? "OUTPUT_APPLY_FAILED"
-                : "MODEL_OUTPUT_INVALID",
+                : isUpstreamQuotaError(error) ? UPSTREAM_QUOTA_CODE : "MODEL_OUTPUT_INVALID",
         errorMessage: errMessage(error).slice(0, 1000),
         ...(callId ? { currentCallId: callId } : {}),
       },
@@ -1114,7 +1123,7 @@ export class ChetaidouTaskRunnerService implements OnModuleInit {
         data: {
           status: state,
           errorCode:
-            error instanceof GatewayTimeoutException ? "PROVIDER_TIMEOUT" : "PROVIDER_ERROR",
+            error instanceof GatewayTimeoutException ? "PROVIDER_TIMEOUT" : isUpstreamQuotaError(error) ? UPSTREAM_QUOTA_CODE : "PROVIDER_ERROR",
           errorMessage: message.slice(0, 1000),
         },
       })
@@ -1763,7 +1772,7 @@ export class ChetaidouTaskRunnerService implements OnModuleInit {
         : null,
     }
     if (task.type === "IDEATION") {
-      await this.prisma.$transaction(async tx => {
+      const rootStatus = await this.prisma.$transaction(async tx => {
         // 与逐维结果发布共用根任务行锁；模型调用仍并行。
         await tx.$queryRaw`SELECT id FROM ChetaidouTask WHERE id = ${task.rootTaskId} FOR UPDATE`
         const groups = await tx.chetaidouGroup.findMany({ where: { taskId: task.rootTaskId } })
@@ -1839,7 +1848,9 @@ export class ChetaidouTaskRunnerService implements OnModuleInit {
               : new Date(),
           },
         })
+        return rootStatus
       })
+      if (rootStatus === "SUCCEEDED") await recordGenerationSuccess(this.prisma, "chetaidouTask", task.rootTaskId)
       return
     }
     await this.prisma.chetaidouTask.update({ where: { id: task.id }, data })
@@ -1861,6 +1872,7 @@ export class ChetaidouTaskRunnerService implements OnModuleInit {
         },
       })
     }
+    if (status === "SUCCEEDED") await recordGenerationSuccess(this.prisma, "chetaidouTask", task.rootTaskId)
   }
 }
 

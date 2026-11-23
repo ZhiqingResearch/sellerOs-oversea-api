@@ -14,6 +14,11 @@ const store = new Map<string, CachedEntry<unknown>>()
 
 const DEFAULT_TTL_MS = 30_000
 
+export function cachedByKey<T>(key: string): Promise<T> | undefined {
+  const entry = store.get(key) as CachedEntry<T> | undefined
+  return entry && (entry.pending || (entry.expiresAt ?? 0) > Date.now()) ? entry.promise : undefined
+}
+
 export function memoizeByKey<T>(
   key: string,
   fn: () => Promise<T>,

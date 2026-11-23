@@ -1,3 +1,4 @@
+import { isQuotaResponse, UpstreamQuotaError } from "../common/errors/upstream-quota"
 import {
   BadGatewayException,
   BadRequestException,
@@ -471,6 +472,7 @@ export class AiGatewayProvider {
       this.logger.error(
         `[AI Gateway] ${action}失败 status=${error.status} type=${error.type ?? "unknown"} code=${error.code ?? "unknown"} retryAfterMs=${error.retryAfterMs ?? "none"}${suffix}: ${error.message}`
       )
+      if (isQuotaResponse({ status: error.status, code: error.code, type: error.type, message: error.message })) return new UpstreamQuotaError("ai-gateway", error.status === 429 ? 429 : [400, 404].includes(error.status) ? 400 : [401, 403].includes(error.status) ? 503 : [408, 504].includes(error.status) ? 504 : 502)
       const message = `AI Gateway ${action}失败：${error.message}${suffix}`
       if (error.status === 400 || error.status === 404) return new BadRequestException(message)
       if (error.status === 401 || error.status === 403) {

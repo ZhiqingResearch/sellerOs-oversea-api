@@ -103,13 +103,18 @@ export function formatReviewB(B: AuditEvidence["B"]): string {
 
 export function formatTrafficPrecompute(D: AuditEvidence["D"]): string {
   const pc = D.trafficPrecompute
-  if (!pc) return "（预计算块不可用，请仅根据 kwTop 保守估计第⑧维）\n"
+  if (!pc) return "（预计算证据不可用，缺少依据的项目应待核，不能估算为零分或满分）\n"
   const lines = [
+    ...(pc.pendingRules?.length
+      ? [
+          `- ${pc.pendingRules.join("/")}：证据不足，必须 pending、score=null，禁止套用旧分档或保守估分。`,
+        ]
+      : []),
     ...pc.summaryLines.map(l => `- ${l}`),
     `- Top10 首页命中数：${pc.top10Page1Hits}`,
     `- 加权自然流量占比：${pc.weightedNaturalPct != null ? `${pc.weightedNaturalPct.toFixed(1)}%` : "N/A"}`,
     `- 机会词约：${pc.opportunityCount} 个`,
-    `- Top1 流量集中度：${pc.top1ConcentrationPct.toFixed(1)}%`,
+    `- Top1 流量集中度：${pc.top1ConcentrationPct?.toFixed(1) ?? "未知"}%`,
   ]
   if (pc.structure) {
     const s = pc.structure
@@ -133,6 +138,16 @@ export function formatTrafficPrecompute(D: AuditEvidence["D"]): string {
   }
   if (pc.concentration) {
     lines.push(`- 集中度原料(concentration，子维度4)：${JSON.stringify(pc.concentration)}`)
+  }
+  if ((!D.kwTop?.length && !D.kwDetail?.length) || pc.structure?.totalKw === 0) {
+    lines.splice(
+      0,
+      lines.length,
+      "- 关键词证据不足：没有可评价词池；首页命中、机会词承接及词族曝光均不可核验。空数组不等于零曝光或正常，不得以预计算默认数值给零分或满分。",
+      ...(pc.pendingRules?.length
+        ? [`- ${pc.pendingRules.join("/")}：证据不足，必须 pending、score=null。`]
+        : [])
+    )
   }
   if (pc.bsrTrend) {
     const bt = pc.bsrTrend
@@ -190,11 +205,14 @@ export function buildAuditEvidenceCards(evidence: AuditEvidence): string {
     C.filled && cLines.length ? cLines.join("\n") : `【未取证】${C.missingReason ?? ""}`
   )
 
+  if (C.group)
+    prompt += `\n竞品词组来源/周期：${JSON.stringify(C.group)}。不同供方流量不可相加或比较涨跌；周量/缺标签不得套旧量级。内容相关性可用，A2/A3自身缺权重或意图证据才待核。\n`
   const kwTopJson = D.kwTop?.length ? JSON.stringify(D.kwTop.slice(0, 10), null, 0) : "[]"
   prompt += cardSection(
-    "D 卡 · 关键词与流量（SIF）",
+    `D 卡 · 关键词与流量（${D.group?.source ?? "sif"}）`,
     D.filled
       ? [
+          `数据组：${JSON.stringify(D.group ?? {})}`,
           `反查词总数：${D.kwStats?.reversed ?? "—"}`,
           `核心词：${D.kwStats?.core ?? "—"} · 自然词：${D.kwStats?.organic ?? "—"} · 广告词：${D.kwStats?.ad ?? "—"} · 机会词：${D.kwStats?.opportunity ?? "—"}`,
           D.summary?.coreCognition ?? "",
@@ -203,18 +221,25 @@ export function buildAuditEvidenceCards(evidence: AuditEvidence): string {
           "",
           "### 口径注记（勿违反）",
           "- 查询词中含促销词 / 竞品品牌词 / 他人型号词属正常分析数据：预计算原料（Top10 / 机会词 / 位置表）已剔除确定性禁词；这些词与竞品在用关键词**不是覆盖义务**，listing 未使用不扣分（`for / compatible with` 兼容前缀表述除外）。",
-          "- `ranking` 中 `广告无排名` = 该词当前无广告位投放；`广告{N}` = 已有广告位排名（优化阶段广告建议以此为准）。",
+          D.group?.source === "xiyou"
+            ? "- 周量不套原阈值；排名以rankTime为准，位置缺失不是未排名或未投广告；缺标签是未知。"
+            : "- `ranking` 中 `广告无排名` = 该词当前无广告位投放；`广告{N}` = 已有广告位排名（优化阶段广告建议以此为准）。",
           "",
           "### 流量诊断预计算（勿自行编造）",
           formatTrafficPrecompute(D),
         ].join("\n")
-      : "【未取证】SIF 流量词缺失"
+      : [D.missingReason ?? "【未取证】SIF 流量词缺失", formatTrafficPrecompute(D)].join("\n")
   )
 
   prompt += cardSection(
     "E 卡 · ASIN 经营",
     E.filled
       ? [
+          `数据组来源、周期和状态：${JSON.stringify(E.groups ?? {})}`,
+          `价格币种：${E.priceBsr.currency ?? "未知"}；趋势观测：${JSON.stringify(E.priceBsr.trendPriceObservation ?? null)}`,
+          `近30天订单量（口径未证明等同销量）：${E.ordersLast30Days ?? "未知"}`,
+          `当前商品价（非Buybox）：${E.priceBsr.currentPrice ?? "未知"}，日期 ${E.priceBsr.currentPriceDate ?? "未知"}`,
+          `历史展示价：${E.priceBsr.displayPrice ?? "未知"}，日期 ${E.priceBsr.displayPriceDate ?? "未知"}`,
           `近月购买：${E.boughtInPastMonth ?? "—"}`,
           `Buybox 价：${E.priceBsr.buyboxPrice ?? "—"}`,
           `BSR：${E.priceBsr.bsr ?? "—"}（${E.priceBsr.bsrTrend ?? "—"}）`,

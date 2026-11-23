@@ -1,0 +1,13 @@
+import type { AuditData, AuditInput, AuditPublicResult } from '../automotive-audit.types.js';
+export const RULE_VERSION: string;
+export function hashValue(value: unknown): string;
+export function normalizeReference(reference: AuditData): AuditData;
+export function createAuditInput(input: AuditData, body: unknown, snapshot: AuditData): AuditInput;
+export function getImageEntries(task: AuditData): { imageId: string; url: string }[];
+export function inspectImage(bytes: Buffer): Promise<AuditData>;
+export function measureImage(bytes: Buffer): Promise<AuditData>;
+export function getOriginalImageUrl(url: string | undefined): string | null;
+export function buildModelRequest(task: AuditData, phase: string, images?: AuditData[]): { prompt: string; content: unknown; maxOutputTokens: number };
+export function validateModelResponse(task: AuditData, phase: string, content: string, images?: AuditData[]): AuditData;
+export function calculateAudit(task: AuditData, reviews: AuditData, options?: { registeredBrand?: string; unavailableImageIds?: string[] }): AuditData;
+export function toPublicResult(result: AuditData, snapshotId: string): AuditPublicResult;

@@ -1,3 +1,5 @@
+import { recordGenerationSuccess } from "../../generation-record/generation-record-success"
+import { quotaTaskMessage } from "../../common/errors/upstream-quota"
 // src/image-generation/executor/image-gen-item-runner.service.ts
 //
 // t2i/i2i(ImageGenJob/ImageGenItem)单图执行器,步骤对齐设计 §5.3:
@@ -20,6 +22,7 @@ import {
 } from "../../common/utils/marketplace-language"
 import { IMAGE_CREATIVE_BUSINESS_TYPE } from "../../chetaidou/chetaidou.constants";
 import { PrismaService } from "../../prisma/prisma.service";
+import { ImageProjectService } from "../../image-project/image-project.service";
 import { CREDIT_PER_CNY } from "../../membership/membership.constants";
 import { UsageService } from "../../usage/usage.service";
 import { IMAGE_PIPELINE_IDEMPOTENCY_PREFIX } from "../../ai-gateway/ai-gateway-image-callbacks.service";
@@ -74,6 +77,7 @@ interface T2IRequestSnapshot {
  */
 export type I2IRequestSnapshot = {
   kind: "IMAGE_TO_IMAGE";
+  projectId?: number;
   localRedraw?: LocalRedrawPlan;
   /** 逻辑 ID 或目录直传的网关 model id(同 T2IRequestSnapshot)。 */
   provider: string;
@@ -135,6 +139,7 @@ export class ImageGenItemRunnerService {
     private readonly providerFactory: ImageProviderFactory,
     private readonly usage: UsageService,
     private readonly queue: DispatchQueueService,
+    private readonly imageProject: ImageProjectService,
   ) {}
 
   get maxAttempts(): number {
@@ -251,10 +256,21 @@ export class ImageGenItemRunnerService {
       // image_generate)。快照携带 serverBilled:true,前端调用方见标记即跳过
       // 自身上报,无双重扣费窗口。best-effort:计费失败只记日志,不影响图片。
       if (settled.count > 0) {
-        await this.reportUsage(job, result, input.idempotencyKey);
+        const credits = await this.reportUsage(job, result, input.idempotencyKey);
+        try {
+          await this.prisma.imageGenItem.updateMany({
+            where: { id: itemId, status: "SUCCEEDED" },
+            data: { gatewayImage: JSON.parse(JSON.stringify({ ...gatewayImagePayload, generationRecordCredits: credits })) },
+          });
+        } catch (error) {
+          this.logger.error(
+            `生成记录结算证据保存失败 itemId=${itemId}`,
+            error instanceof Error ? error.stack : String(error),
+          );
+        }
       }
     } catch (err) {
-      const message = describeImageError(err);
+      const message = quotaTaskMessage(err, "not_charged", describeImageError(err), "item");
       const kind = err instanceof RelayError ? err.kind : null;
       const attemptNo = item.attemptNo ?? 1;
       const elapsedMs = Date.now() - attemptStartedAt;
@@ -348,7 +364,7 @@ export class ImageGenItemRunnerService {
     job: { id: string; userId: number; kind: string; source?: string; request: unknown },
     result: { tokenUsage?: TokenUsage | null; costAmountCny?: string; gatewayTaskId?: string },
     chargeRequestId?: string,
-  ): Promise<void> {
+  ): Promise<string | null> {
     const invokeType = job.source === "vidflowos" ? InvokeType.API : InvokeType.PLATFORM
     const provider =
       (job.request as ImageGenRequestSnapshot | null)?.provider ?? "";
@@ -360,7 +376,7 @@ export class ImageGenItemRunnerService {
     const fixedCredits = await this.loadFixedCredits(provider, category);
     if (fixedCredits) {
       try {
-        await this.usage.chargeModel(job.userId, fixedCredits.div(CREDIT_PER_CNY).toString(), {
+        const charge = await this.usage.chargeModel(job.userId, fixedCredits.div(CREDIT_PER_CNY).toString(), {
           source: IMAGE_GENERATE_USAGE_SOURCE,
           invokeType,
           model: provider,
@@ -380,12 +396,13 @@ export class ImageGenItemRunnerService {
         this.logger.log(
           `[image-gen] fixed-price charged: job=${job.id} kind=${job.kind} credits=${fixedCredits.toString()} gatewayAmount=${result.costAmountCny ?? "0"}CNY`,
         );
-      } catch (err) {
+        return charge.creditsCharged.toString();
+    } catch (err) {
         this.logger.error(
           `[image-gen] failed to charge fixed price: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
-      return;
+      return null;
     }
 
     // 网关 amount(CNY)口径,走公共扣款 v2(chargeModel):注册表校验 +
@@ -397,11 +414,11 @@ export class ImageGenItemRunnerService {
         this.logger.warn(
           `[image-gen] skip gateway charge: non-positive amount=${result.costAmountCny} job=${job.id}`,
         );
-        return;
+        return Number(result.costAmountCny) === 0 ? "0" : null;
       }
       const priceMultiplier = await this.loadPriceMultiplier(provider, category);
       try {
-        await this.usage.chargeModel(job.userId, result.costAmountCny, {
+        const charge = await this.usage.chargeModel(job.userId, result.costAmountCny, {
           source: IMAGE_GENERATE_USAGE_SOURCE,
           invokeType,
           model: provider,
@@ -421,16 +438,17 @@ export class ImageGenItemRunnerService {
         this.logger.log(
           `[image-gen] gateway usage reported: job=${job.id} kind=${job.kind} amount=${result.costAmountCny}CNY`,
         );
-      } catch (err) {
+        return charge.creditsCharged.toString();
+    } catch (err) {
         this.logger.error(
           `[image-gen] failed to charge gateway usage: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
-      return;
+      return null;
     }
 
     const usage = result.tokenUsage ?? null;
-    if (!usage) return;
+    if (!usage) return null;
     const prompt = usage.promptTokens ?? 0;
     const completion = usage.completionTokens ?? 0;
     const total = usage.totalTokens || prompt + completion;
@@ -445,10 +463,10 @@ export class ImageGenItemRunnerService {
       this.logger.warn(
         `[image-gen] skip usage report: totalTokens=${total} — provider returned no token usage (meta=${JSON.stringify(meta)})`,
       );
-      return;
+      return null;
     }
     try {
-      await this.usage.chargeTokens(
+      const charge = await this.usage.chargeTokens(
         job.userId,
         {
           promptTokens: prompt,
@@ -462,11 +480,13 @@ export class ImageGenItemRunnerService {
       this.logger.log(
         `[image-gen] usage reported: job=${job.id} kind=${job.kind} totalTokens=${total}`,
       );
+      return charge.creditsCharged.toString();
     } catch (err) {
       this.logger.error(
         `[image-gen] failed to report token usage: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+    return null;
   }
 
   /** 计费倍率(与其他模块同口径):AiGatewayModel.priceMultiplier,逻辑 ID
@@ -509,6 +529,39 @@ export class ImageGenItemRunnerService {
         tokenUsage: sumUsage(items.map((i) => i.usage as Record<string, unknown> | null)),
       },
     });
+    if (anySuccess) await recordGenerationSuccess(this.prisma, "imageGenJob", jobId);
+    await this.archiveJob(jobId);
+  }
+
+  /** 入库失败只重试保存，不重新生图或扣费；定时对账复用此入口。 */
+  async archiveJob(jobId: string): Promise<void> {
+    try {
+      const job = await this.prisma.imageGenJob.findFirst({
+        where: { id: jobId, source: "platform", kind: "IMAGE_TO_IMAGE", businessType: IMAGE_CREATIVE_BUSINESS_TYPE,
+          taskId: null, request: { path: "$.projectId", gt: 0 } },
+        include: { items: { orderBy: { idx: "asc" } } },
+      });
+      if (!job) return;
+      const request = job.request as I2IRequestSnapshot;
+      const projectId = request.projectId;
+      if (typeof projectId !== "number" || !Number.isSafeInteger(projectId) || projectId <= 0 || request.localRedraw ||
+        job.items.some(item => item.status !== "SUCCEEDED" && item.status !== "FAILED")) return;
+      const images = job.items.filter(item => item.status === "SUCCEEDED" && item.url && item.deletedAt === null);
+      if (!images.length) return;
+      await this.imageProject.createTask(projectId, {
+        sourceJobId: job.id,
+        presetCategory: "批量改图",
+        model: request.provider,
+        prompt: request.prompt,
+        aspectRatio: request.aspectRatio,
+        refImageUrls: request.referenceUrls ?? request.perItemReferenceUrls?.flat(),
+        n: images.length,
+        status: "SUCCESS",
+        generatedImages: images.map(item => ({ url: item.url!, status: "SUCCESS", order: item.idx })),
+      }, job.userId);
+    } catch (error) {
+      this.logger.error(`批量改图自动入库失败，等待对账重试 job=${jobId}: ${String(error)}`);
+    }
   }
 
   private async buildProviderInput(

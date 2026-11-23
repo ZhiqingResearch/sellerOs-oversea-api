@@ -11,6 +11,14 @@ export const DAY_MS = 24 * 60 * 60 * 1000
 /** 新注册赠送的体验积分（进 GIFT 桶，注册起 30 天过期，与套餐/充值赠送同口径） */
 export const SIGNUP_BONUS_CREDITS = 200
 
+/** 平台后台可人工增减的积分桶（返利桶不可调整） */
+export const ADMIN_ADJUSTABLE_CREDIT_BUCKETS = [
+  CreditBucket.RECHARGE,
+  CreditBucket.PACKAGE,
+  CreditBucket.GIFT,
+] as const
+export type AdminAdjustableCreditBucket = (typeof ADMIN_ADJUSTABLE_CREDIT_BUCKETS)[number]
+
 /** 注册赠送 200 的过期时点：注册（发放）时间 + PACKAGE_EXPIRE_DAYS 天，与套餐赠送一致 */
 export function signupBonusExpiresAt(from: Date): Date {
   return new Date(from.getTime() + PACKAGE_EXPIRE_DAYS * DAY_MS)

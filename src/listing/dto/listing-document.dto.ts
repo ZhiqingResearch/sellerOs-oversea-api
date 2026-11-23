@@ -1,10 +1,25 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger"
 import { Type } from "class-transformer"
-import { IsIn, IsInt, IsNotEmpty, IsOptional, IsString, Max, MaxLength, Min } from "class-validator"
-import { MAX_LISTING_DOCUMENT_BYTES } from "../listing-document.constants"
+import {
+  IsBoolean,
+  IsIn,
+  IsInt,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+} from "class-validator"
 import { LISTING_AI_MODELS, type ListingAiModel } from "../listing-ai.models"
+import { MAX_LISTING_DOCUMENT_BYTES } from "../listing-document.constants"
 
 export class CreateListingDocumentUploadDto {
+  @ApiPropertyOptional({ description: "汽配本地页需要签名文档读取地址时显式开启", default: false })
+  @IsOptional()
+  @IsBoolean()
+  includeDocumentUrl?: boolean
+
   @ApiProperty({ example: "product-spec.pdf" })
   @IsString()
   @IsNotEmpty()

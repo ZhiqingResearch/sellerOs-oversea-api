@@ -1,3 +1,4 @@
+import { isQuotaResponse, UpstreamQuotaError } from "../errors/upstream-quota"
 import { Injectable, Logger } from "@nestjs/common"
 import { ConfigService } from "@nestjs/config"
 import axios from "axios"
@@ -185,6 +186,7 @@ export class CrawlerProvider {
     const start = Date.now()
     const resp = await this.post(AUDIT_PATH, url)
     // 审计兜底按 HTTP 失败触发，不能被异常服务的 code:200 信封掩盖。
+    if (isQuotaResponse({ status: resp.status, ...((resp.data && typeof resp.data === "object") ? resp.data : {}) })) throw new UpstreamQuotaError("crawler")
     if (resp.status < 200 || resp.status >= 300) {
       throw new CrawlerError(`UPSTREAM_HTTP_${resp.status}`, "商品详情数据源暂不可用")
     }
@@ -217,6 +219,7 @@ export class CrawlerProvider {
     url: string,
     start: number
   ): T {
+    if (isQuotaResponse({ status, ...((body && typeof body === "object") ? body : {}) })) throw new UpstreamQuotaError("crawler")
     if (status >= 500) {
       throw new CrawlerError("UPSTREAM_5XX", `爬虫服务返回 ${status}`)
     }

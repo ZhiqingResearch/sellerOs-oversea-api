@@ -1,3 +1,4 @@
+import { isQuotaResponse } from "../../common/errors/upstream-quota"
 // src/server/image/retry-utils.ts
 //
 // Shared retry / error-classification toolkit for image providers.
@@ -61,8 +62,7 @@ const PERMANENT_AUTH_HINTS = [
   "unauthori",
   "forbidden",
   "invalid key",
-  "no credit",
-  "insufficient",
+  "insufficient permissions",
 ];
 
 const PERMANENT_POLICY_HINTS = [
@@ -107,9 +107,9 @@ export function classifyHttpStatus(status: number): FailureKind {
 export function classifyBodyMessage(raw: string | undefined | null): FailureKind {
   const msg = (raw || "").toLowerCase();
   if (!msg) return "transient_body";
+  if (isQuotaResponse(raw)) return "permanent_quota";
   if (PERMANENT_AUTH_HINTS.some((h) => msg.includes(h))) return "permanent_auth";
   if (PERMANENT_POLICY_HINTS.some((h) => msg.includes(h))) return "permanent_policy";
-  if (msg.includes("quota") || msg.includes("credit")) return "permanent_quota";
   if (PERMANENT_VALIDATION_HINTS.some((h) => msg.includes(h))) return "permanent_validation";
   if (TRANSIENT_BODY_HINTS.some((h) => msg.includes(h))) return "transient_body";
   // Unknown body error — lean transient so we give it one more shot; the
@@ -135,7 +135,7 @@ export function friendlyMessage(kind: FailureKind): string {
     case "permanent_auth":
       return "图像服务配置异常，请联系管理员";
     case "permanent_quota":
-      return "图像服务额度不足，请联系管理员";
+      return "数据未获取";
     case "permanent_policy":
       return "提示词涉及敏感或不允许的内容，已被服务拒绝";
     case "permanent_validation":

@@ -1,3 +1,4 @@
+jest.mock("../generation-record/generation-record-success", () => ({ recordGenerationSuccess: jest.fn().mockResolvedValue(undefined) }))
 import { ConfigService } from "@nestjs/config"
 import { Prisma } from "@prisma/client"
 import { createHash } from "crypto"
@@ -61,7 +62,7 @@ function billing(
   return { requestId, requestIds: [requestId], costCny, model, currency: "CNY" }
 }
 
-function setup() {
+function setup(catalog = false) {
   const record = {
     id: 1,
     userId: 7,
@@ -99,6 +100,7 @@ function setup() {
     },
   }
   const prisma = {
+    aiGatewayModel: { findFirst: jest.fn().mockResolvedValue({ publicId: "category-test-model" }) },
     categoryAnalysisRecord: records,
     usageLog: { findFirst: jest.fn().mockResolvedValue(null) },
     $transaction: jest.fn(async (fn: (value: unknown) => Promise<unknown>) => fn(tx)),
@@ -143,7 +145,7 @@ function setup() {
     data as unknown as CategoryEvidenceProvider,
     gateway as unknown as AiGatewayProvider,
     usage as unknown as UsageService,
-    new ConfigService({ AI_GATEWAY_API_KEY: "test" })
+    new ConfigService({ AI_GATEWAY_API_KEY: "test", CATEGORY_ANALYSIS_MODEL_SOURCE: catalog ? "catalog" : "env" })
   )
   return { service, records, record, tx, prisma, data, gateway, usage }
 }
@@ -168,6 +170,39 @@ describe("类目分析成功后固定扣费", () => {
     expect(progress(ctx).at(-1)?.status).toBe("COMPLETED")
     expect(uiLanguage()).toBe("zh-CN")
   })
+  it("按分类从模型目录选择本次任务的模型", async () => {
+    const ctx = setup(true)
+    ctx.prisma.aiGatewayModel.findFirst.mockResolvedValue({ publicId: "model-from-database" })
+
+    await ctx.service.processQueue()
+
+    expect(ctx.prisma.aiGatewayModel.findFirst).toHaveBeenCalledTimes(1)
+    expect(ctx.prisma.aiGatewayModel.findFirst).toHaveBeenCalledWith({
+      where: { category: "CATEGORY_ANALYSIS", modality: "TEXT", execMode: "SYNC", enabled: true, gatewayActive: true },
+      orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+      select: { publicId: true },
+    })
+    expect(ctx.gateway.streamChat).toHaveBeenCalledTimes(categories.length)
+    for (const [, , options] of ctx.gateway.streamChat.mock.calls) {
+      expect(options?.model).toBe("model-from-database")
+    }
+  })
+
+  it("分类没有可用模型时，任务失败且不取报告数据、不调用网关、不扣费", async () => {
+    const ctx = setup(true)
+    ctx.prisma.aiGatewayModel.findFirst.mockResolvedValue(null)
+
+    await ctx.service.processQueue()
+
+    expect(progress(ctx).at(-1)).toMatchObject({
+      status: "FAILED",
+      error: "类目分析模型尚未配置或不可用，请联系管理员",
+    })
+    expect(ctx.data.collect).not.toHaveBeenCalled()
+    expect(ctx.gateway.streamChat).not.toHaveBeenCalled()
+    expect(ctx.usage.chargeFixedModule).not.toHaveBeenCalled()
+  })
+
   it("确认提交只创建零积分任务，事务完成后才调度取数", async () => {
     const ctx = setup()
     const process = jest.spyOn(ctx.service, "processQueue").mockResolvedValue()

@@ -1,3 +1,4 @@
+import { isQuotaResponse, isUpstreamQuotaError, quotaFailure, UpstreamQuotaError } from "../common/errors/upstream-quota"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { Injectable, Logger, ServiceUnavailableException } from "@nestjs/common"
@@ -353,6 +354,8 @@ export class CompetitorEvidenceProvider {
   ): Promise<{ data: unknown[]; callCount: number }> {
     const settled = await Promise.allSettled(requests)
     if (settled.every(result => result.status === "rejected")) {
+      const reason = this._preferredFailureReason(settled)
+      if (isUpstreamQuotaError(reason)) throw reason
       throw new ServiceUnavailableException(
         this._providerFailureMessage("sif", this._preferredFailureReason(settled))
       )
@@ -426,6 +429,8 @@ export class CompetitorEvidenceProvider {
         : { error: result.reason instanceof Error ? result.reason.message : "SIF 请求失败" }
     )
     if (settled.every(result => result.status === "rejected")) {
+      const reason = this._preferredFailureReason(settled)
+      if (isUpstreamQuotaError(reason)) throw reason
       throw new ServiceUnavailableException(
         this._providerFailureMessage("sif", this._preferredFailureReason(settled))
       )
@@ -502,6 +507,7 @@ export class CompetitorEvidenceProvider {
       headers: { authorization: apiKey, "Content-Type": "application/json" },
       timeout: 45_000,
     })
+    if (response.data.code === -20 || response.data.code === -25) throw new UpstreamQuotaError("sif", 503)
     if (response.data.code !== 1) {
       throw new Error(response.data.message?.trim() || `SIF 返回错误 code=${response.data.code}`)
     }
@@ -657,6 +663,8 @@ export class CompetitorEvidenceProvider {
       })
     )
     if (settled.every(result => result.status === "rejected")) {
+      const reason = this._preferredFailureReason(settled)
+      if (isUpstreamQuotaError(reason)) throw reason
       throw new ServiceUnavailableException(
         this._providerFailureMessage("keepa", this._preferredFailureReason(settled))
       )
@@ -682,6 +690,7 @@ export class CompetitorEvidenceProvider {
       throw new Error("Keepa 返回格式无效")
     }
     const envelope = value as Record<string, unknown>
+    if (isQuotaResponse(envelope)) throw new UpstreamQuotaError("keepa", 503)
     const error = envelope.error
     if (error && typeof error === "object" && !Array.isArray(error)) {
       const message = (error as Record<string, unknown>).message
@@ -761,6 +770,8 @@ export class CompetitorEvidenceProvider {
       sources.push({ provider, status: "used", label: uiText("SIF 竞品事实数据", "SIF competitor facts") })
       return result.value
     }
+    if (isUpstreamQuotaError(result.reason)) throw quotaFailure(result.reason, "not_charged")
+    if (isQuotaResponse(result.reason)) throw quotaFailure(new UpstreamQuotaError(provider, 503), "not_charged")
     const rawMessage = this._errorMessage(result.reason)
     const message = this._providerFailureMessage(provider, result.reason)
     this.logger.error(`竞品数据获取失败 provider=${provider} message=${rawMessage}`)
@@ -781,7 +792,7 @@ export class CompetitorEvidenceProvider {
         status: "failed",
         label: this._sourceLabel(provider),
         message,
-        retryable: !message.includes("凭证") && !message.includes("配额"),
+        retryable: !isUpstreamQuotaError(result.reason) && !isQuotaResponse(result.reason) && !message.includes("凭证"),
       })
       return null
     }
@@ -834,9 +845,7 @@ export class CompetitorEvidenceProvider {
 
   private _preferredError(reasons: unknown[]): unknown {
     return (
-      reasons.find(reason =>
-        /配额|quota|credit|rate.?limit|次数.*(?:用完|不足|超限)/i.test(this._errorMessage(reason))
-      ) ??
+      reasons.find(reason => isUpstreamQuotaError(reason) || isQuotaResponse(reason)) ??
       reasons.find(reason =>
         /未配置|api.?key|secret|unauthorized|forbidden|401|403|鉴权|认证|密钥|无权限/i.test(
           this._errorMessage(reason)
@@ -852,9 +861,8 @@ export class CompetitorEvidenceProvider {
   ): string {
     const providerName = this._providerName(provider)
     const message = this._errorMessage(error)
-    if (/配额|quota|credit|rate.?limit|too many requests|次数.*(?:用完|不足|超限)/i.test(message)) {
-      return uiText(`${providerName} 配额已用完，请联系管理员补充额度`, `${providerName} quota exhausted. Ask an administrator to replenish it.`)
-    }
+    if (isUpstreamQuotaError(error) || isQuotaResponse(error)) return uiText("部分数据未获取", "Some data is unavailable")
+    if (/rate.?limit|too many requests|请求频率|频率超限/i.test(message)) return "数据服务请求频率超限，请稍后重试"
     if (
       /未配置|api.?key|secret|unauthorized|forbidden|401|403|鉴权|认证|密钥|无权限/i.test(message)
     ) {

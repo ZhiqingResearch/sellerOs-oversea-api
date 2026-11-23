@@ -1,11 +1,13 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from "@nestjs/common"
 import { ConfigService } from "@nestjs/config"
 import { Test } from "@nestjs/testing"
+import { CreditBucket } from "@prisma/client"
 import { Decimal } from "@prisma/client/runtime/library"
 import { DefaultMemberRoleService } from "../common/services/default-member-role.service"
 import { CreditService } from "../membership/credit.service"
 import { DAY_MS } from "../membership/membership.constants"
 import { PrismaService } from "../prisma/prisma.service"
+import { QueryMembersDto } from "./dto/console.dto"
 import { TeamPoolService } from "./team-pool.service"
 import {
   TEAM_DATA_KEEP_DAYS,
@@ -83,8 +85,14 @@ describe("TeamService", () => {
     cancelPendingScheduledPlans: jest.Mock
     consumableBalance: jest.Mock
     transferGiftLotsToTeam: jest.Mock
+    adjustCreditsByBucket: jest.Mock
   }
-  let pool: { grantPool: jest.Mock; poolBuckets: jest.Mock; poolGrantedTotal: jest.Mock }
+  let pool: {
+    grantPool: jest.Mock
+    poolBuckets: jest.Mock
+    poolGrantedTotal: jest.Mock
+    adjustPoolRecharge: jest.Mock
+  }
 
   const expiresAt = new Date("2027-01-01T00:00:00.000Z")
   const activeTeam = (over: Record<string, unknown> = {}) => ({
@@ -165,6 +173,7 @@ describe("TeamService", () => {
       // 默认个人套餐积分为 0（可拉入）。
       consumableBalance: jest.fn().mockResolvedValue(new Decimal(0)),
       transferGiftLotsToTeam: jest.fn().mockResolvedValue(new Decimal(0)),
+      adjustCreditsByBucket: jest.fn(),
     }
     pool = {
       grantPool: jest.fn().mockResolvedValue(undefined),
@@ -175,6 +184,7 @@ describe("TeamService", () => {
         total: new Decimal(7000),
       }),
       poolGrantedTotal: jest.fn().mockResolvedValue(new Decimal(7000)),
+      adjustPoolRecharge: jest.fn().mockResolvedValue(undefined),
     }
 
     const moduleRef = await Test.createTestingModule({
@@ -188,6 +198,113 @@ describe("TeamService", () => {
       ],
     }).compile()
     service = moduleRef.get(TeamService)
+  })
+
+  describe("listMembers", () => {
+    const rows = [
+      [100, null, "3200", "ADMIN", "ACTIVE"],
+      [2, 100, "0", "MEMBER", "ACTIVE"],
+      [3, 100, "89.9999", "MEMBER", "ACTIVE"],
+      [4, 100, "90", "MEMBER", "ACTIVE"],
+      [5, 100, "99.9999", "MEMBER", "DISABLED"],
+      [6, 100, "100", "MEMBER", "ACTIVE"],
+      [7, 100, "100.0001", "MEMBER", "ACTIVE"],
+      [8, null, "0", "MEMBER", "ARCHIVED"],
+    ].map(([userId, monthlyQuota, used, role, status]) => ({
+      userId: userId as number,
+      monthlyQuota: monthlyQuota as number | null,
+      quotaUsedThisMonth: new Decimal(used as string),
+      role,
+      status,
+      joinedAt: new Date("2026-01-12T00:00:00.000Z"),
+      user: {
+        username: userId === 4 ? "Alpha成员" : `成员${userId}`,
+        phone: `138000000${String(userId).padStart(2, "0")}`,
+        email: userId === 4 ? "Alpha@example.com" : null,
+      },
+    }))
+
+    beforeEach(() => {
+      prisma.team.findUniqueOrThrow.mockResolvedValue({ adminId: 100 })
+      prisma.teamMember.findMany.mockResolvedValue(rows)
+    })
+
+    it("不传条件保持数组结构、字段、类型和原顺序", async () => {
+      const result = await service.listMembers(1)
+      expect(result).toHaveLength(rows.length)
+      expect(result[0]).toEqual({
+        userId: 100,
+        username: "成员100",
+        phone: "138000000100",
+        email: null,
+        role: "ADMIN",
+        isTeamAdmin: true,
+        status: "ACTIVE",
+        joinedAt: rows[0].joinedAt,
+        monthlyQuota: null,
+        quotaUsedThisMonth: new Decimal(3200),
+        quotaRemaining: null,
+      })
+      expect(result.map(m => m.userId)).toEqual(rows.map(m => m.userId))
+      expect(result.find(m => m.userId === 3)?.quotaRemaining).toEqual(new Decimal("10.0001"))
+      expect(result.find(m => m.userId === 7)?.quotaRemaining).toEqual(new Decimal(0))
+      expect(prisma.teamMember.findMany).toHaveBeenCalledWith({
+        where: { teamId: 1 },
+        include: { user: { select: { id: true, username: true, phone: true, email: true } } },
+        orderBy: { joinedAt: "asc" },
+      })
+    })
+
+    it.each<[QueryMembersDto, number[]]>([
+      [{ keyword: "  ALPHA  " }, [4]],
+      [{ keyword: "13800000004" }, [4]],
+      [{ keyword: "EXAMPLE.COM" }, [4]],
+      [{ keyword: "   " }, [100, 2, 3, 4, 5, 6, 7, 8]],
+      [{ role: "ADMIN" }, [100]],
+      [{ role: "MEMBER" }, [2, 3, 4, 5, 6, 7, 8]],
+      [{ status: "ACTIVE" }, [100, 2, 3, 4, 6, 7]],
+      [{ status: "DISABLED" }, [5]],
+      [{ quotaStatus: "SUFFICIENT" }, [2, 3]],
+      [{ quotaStatus: "NEAR_LIMIT" }, [4, 5]],
+      [{ quotaStatus: "EXHAUSTED" }, [6, 7]],
+      [{ quotaStatus: "UNLIMITED" }, [100, 8]],
+      [{ usageStatus: "USED" }, [100, 3, 4, 5, 6, 7]],
+      [{ usageStatus: "UNUSED" }, [2, 8]],
+      [
+        {
+          keyword: "alpha",
+          role: "MEMBER",
+          status: "ACTIVE",
+          quotaStatus: "NEAR_LIMIT",
+          usageStatus: "USED",
+        },
+        [4],
+      ],
+      [{ status: "DISABLED", usageStatus: "UNUSED" }, []],
+    ])("按条件 %j 筛选", async (query, expected) => {
+      expect((await service.listMembers(1, query)).map(m => m.userId)).toEqual(expected)
+    })
+
+    it("空成员列表返回空数组", async () => {
+      prisma.teamMember.findMany.mockResolvedValue([])
+      expect(await service.listMembers(1, { quotaStatus: "NEAR_LIMIT" })).toEqual([])
+    })
+
+    it("归档历史筛选保留原始状态和用量，月度重置仍排除归档团队", async () => {
+      prisma.teamMember.findMany.mockResolvedValue([{ ...rows[3], status: "ARCHIVED" }])
+      const result = await service.listMembers(1, {
+        quotaStatus: "NEAR_LIMIT",
+        usageStatus: "USED",
+      })
+      expect(result).toHaveLength(1)
+      expect(result[0].status).toBe("ARCHIVED")
+      expect(result[0].quotaUsedThisMonth).toEqual(new Decimal(90))
+      const reset = firstArgs<{ where: { teamId: number; team: { status: { not: string } } } }>(
+        prisma.teamMember.updateMany
+      )[0]
+      expect(reset.where.teamId).toBe(1)
+      expect(reset.where.team.status.not).toBe("ARCHIVED")
+    })
   })
 
   describe("createCustomTeam", () => {
@@ -1292,6 +1409,89 @@ describe("TeamService", () => {
       })
       expect(res.items[0].seatsUsed).toBe(2)
       expect(res.items[0].seats).toBe(2)
+    })
+  })
+
+  describe("adjustTeam", () => {
+    beforeEach(() => {
+      prisma.team.findUnique.mockResolvedValue(activeTeam())
+      jest.spyOn(service, "getAdminTeamDetail").mockResolvedValue({} as never)
+    })
+
+    it("增加套餐积分并延长有效期：先更新团队到期日，再按新到期日发放 PACKAGE", async () => {
+      const expectedExpiry = new Date(expiresAt.getTime() + 30 * DAY_MS)
+
+      await service.adjustTeam(1, 99, {
+        creditType: CreditBucket.PACKAGE,
+        creditsDelta: 500,
+        extendDays: 30,
+        reason: "客户补偿",
+      } as never)
+
+      expect(prisma.team.update).toHaveBeenCalledWith({
+        where: { id: 1 },
+        data: {
+          expiresAt: expectedExpiry,
+          graceUntil: graceUntilOf(expectedExpiry),
+          dataKeepUntil: dataKeepUntilOf(expectedExpiry),
+        },
+      })
+      expect(prisma.creditLot.updateMany).toHaveBeenCalledWith({
+        where: {
+          teamId: 1,
+          sourceType: "RECHARGE_PLAN",
+          bucket: { in: [CreditBucket.PACKAGE, CreditBucket.GIFT] },
+          status: "ACTIVE",
+          remaining: { gt: 0 },
+          expiresAt: { gt: expect.any(Date) as Date, lt: expectedExpiry },
+        },
+        data: { expiresAt: expectedExpiry },
+      })
+      expect(credit.adjustCreditsByBucket).toHaveBeenCalledWith(
+        100,
+        CreditBucket.PACKAGE,
+        500,
+        expect.objectContaining({
+          teamId: 1,
+          expiresAt: expectedExpiry,
+          source: "admin.team.adjust",
+          meta: expect.objectContaining({
+            creditType: CreditBucket.PACKAGE,
+            creditsDelta: 500,
+            extendDays: 30,
+            reason: "客户补偿",
+          }) as unknown,
+        }),
+        prisma
+      )
+      expect(prisma.teamAuditLog.create).toHaveBeenCalledTimes(1)
+    })
+
+    it("扣减赠送积分不延长有效期，按精确 GIFT 桶调整", async () => {
+      await service.adjustTeam(1, 99, {
+        creditType: CreditBucket.GIFT,
+        creditsDelta: -100,
+      } as never)
+
+      expect(prisma.team.update).not.toHaveBeenCalled()
+      expect(credit.adjustCreditsByBucket).toHaveBeenCalledWith(
+        100,
+        CreditBucket.GIFT,
+        -100,
+        expect.objectContaining({ teamId: 1, expiresAt: null, source: "admin.team.adjust" }),
+        prisma
+      )
+    })
+
+    it("扣减积分同时传延长有效期 → 400", async () => {
+      await expect(
+        service.adjustTeam(1, 99, {
+          creditType: CreditBucket.RECHARGE,
+          creditsDelta: -100,
+          extendDays: 30,
+        } as never)
+      ).rejects.toThrow("扣减积分时不允许延长有效期")
+      expect(prisma.$transaction).not.toHaveBeenCalled()
     })
   })
 })

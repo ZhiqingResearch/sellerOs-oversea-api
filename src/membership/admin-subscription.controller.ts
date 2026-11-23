@@ -62,8 +62,7 @@ export class AdminSubscriptionController {
   @UseGuards(PermissionsGuard)
   @RequirePermissions("management.users")
   @ApiOperation({
-    summary:
-      "客服补偿调整：赠送积分（可负数）/ 延长有效期，充值记录显示「后台积分发放/后台积分扣减」，不产生订单",
+    summary: "调整个人积分：精确增减充值/套餐/赠送积分，可单独或同时延长有效期；不产生订单",
   })
   adjust(
     @Param("userId", ParseIntPipe) userId: number,

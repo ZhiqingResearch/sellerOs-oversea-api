@@ -26,7 +26,10 @@ export class WalletController {
   }
 
   @Get("transactions")
-  @ApiOperation({ summary: "积分明细（分页，按方向/桶/类型/归属/扣费来源/调用方式筛选）" })
+  @ApiOperation({
+    summary: "积分明细（分页，按方向/桶/类型/归属/扣费来源/调用方式筛选）",
+    description: "Listing 自动评分按后台任务关联归入生成或优化消费，历史费用合并到对应主步骤，不作为独立打分记录；来源筛选沿用同一归类。businessDetails 全量明细之和等于父记录 amount，历史金额不重算。",
+  })
   transactions(@Request() req: { user: { id: number } }, @Query() query: QueryTransactionsDto) {
     return this.walletService.listTransactions(req.user.id, query)
   }

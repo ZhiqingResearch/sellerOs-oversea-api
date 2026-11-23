@@ -1,5 +1,5 @@
 import { HttpService } from "@nestjs/axios"
-import { Injectable, Logger } from "@nestjs/common"
+import { BadRequestException, Injectable, Logger } from "@nestjs/common"
 import { ConfigService } from "@nestjs/config"
 import OSS from "ali-oss"
 import type { Readable } from "stream"
@@ -51,6 +51,29 @@ export class OssService {
     const url = `${this.baseUrl.replace(/\/$/, "")}/${key.replace(/^\//, "")}`
     this.logger.log(`OSS 流式上传完成 [key=${key}, contentLength=${contentLength ?? "chunked"}]`)
     return url
+  }
+
+  /** 仅供已校验业务对象 key 的内部调用；不接受外部 URL。 */
+  async readObject(key: string, maxBytes: number): Promise<Buffer> {
+    const result = await this.client.getStream(key)
+    const stream = result.stream as Readable
+    let size = 0
+    const chunks: Buffer[] = []
+    try {
+      for await (const chunk of stream) {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array)
+        size += buffer.length
+        if (size > maxBytes) throw new BadRequestException("图片不能超过 10MB")
+        chunks.push(buffer)
+      }
+      return Buffer.concat(chunks)
+    } finally {
+      stream.destroy()
+    }
+  }
+
+  signedReadUrl(key: string): string {
+    return this.client.signatureUrl(key, { expires: 3600 })
   }
 
   generateOSSPolicy() {

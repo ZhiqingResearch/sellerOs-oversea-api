@@ -203,7 +203,7 @@ export class QueryImageTemplateDto extends PaginationDto {
   @IsString()
   tag?: string
 
-  @ApiPropertyOptional({ description: "关键字模糊匹配（模板名 / 备注 / 条目 prompt）" })
+  @ApiPropertyOptional({ description: "关键字模糊匹配（模板名 / 分组名 / 标签 / 备注 / 提示词）" })
   @IsOptional()
   @IsString()
   keyword?: string

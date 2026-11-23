@@ -125,7 +125,7 @@ describe("Apify Amazon 兜底", () => {
         response: status ? { status, data: "test-secret" } : undefined,
       })
       await expect(makeProvider().fetchAmazonAuditProduct(target)).rejects.toThrow(
-        "备用商品数据源暂不可用"
+        status === 402 ? "数据未获取" : "备用商品数据源暂不可用"
       )
       expect(http.post.mock.calls).toHaveLength(1)
       expect(JSON.stringify(warn.mock.calls)).not.toContain("test-secret")

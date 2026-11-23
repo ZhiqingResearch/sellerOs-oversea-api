@@ -9,6 +9,7 @@ import { AuditScoreService } from "./audit-score.service"
 import { AsinAuditEvidenceController } from "./evidence/evidence.controller"
 import { EvidenceService } from "./evidence/evidence.service"
 import { SellerSpriteMcpClient } from "./evidence/mcp.client"
+import { XiyouClient } from "./evidence/xiyou.client"
 import { SifClient } from "./evidence/sif.client"
 import { ReviewAnalysisService } from "./review-analysis.service"
 import { ReviewPainPointsService } from "./review-pain-points.service"
@@ -24,6 +25,7 @@ import { ReviewPainPointsService } from "./review-pain-points.service"
     AuditScoreService,
     AuditOptimizeService,
     SifClient,
+    XiyouClient,
     SellerSpriteMcpClient,
     EvidenceService,
   ],

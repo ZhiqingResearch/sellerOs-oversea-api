@@ -13,6 +13,8 @@ import {
   Min,
 } from "class-validator"
 import { PaginationDto } from "../../common/dto/pagination.dto"
+import type { AdminAdjustableCreditBucket } from "../../membership/membership.constants"
+import { ADMIN_ADJUSTABLE_CREDIT_BUCKETS } from "../../membership/membership.constants"
 
 /** 平台定制企业开通（不走订单、不开发收据；合同金额仅留痕） */
 export class CreateCustomTeamDto {
@@ -155,11 +157,30 @@ export class UpdateTeamDto {
   contractNote?: string
 }
 
-/** 调整（客服补偿）：赠送池充值积分（可负数扣减，不得超剩余）/ 延长有效期；至少传一项 */
+/** 平台调整企业积分：可精确增减 RECHARGE/PACKAGE/GIFT；支持单独延长有效期 */
 export class AdjustTeamDto {
   @ApiPropertyOptional({
+    enum: ADMIN_ADJUSTABLE_CREDIT_BUCKETS,
+    description: "积分类型：充值积分/套餐积分/赠送积分；传 creditsDelta 时必填",
+  })
+  @IsOptional()
+  @IsIn(ADMIN_ADJUSTABLE_CREDIT_BUCKETS)
+  creditType?: AdminAdjustableCreditBucket
+
+  @ApiPropertyOptional({
+    example: -500,
+    description: "积分变动（正=增加 / 负=扣减）；扣减时不得传 extendDays",
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  creditsDelta?: number
+
+  /** @deprecated 旧版仅调整 RECHARGE 的字段；新调用请使用 creditType + creditsDelta */
+  @ApiPropertyOptional({
     example: 5000,
-    description: "池充值积分增减（正=赠送 / 负=扣减，进 RECHARGE 桶）",
+    description: "【兼容旧版】池充值积分增减（等价 creditType=RECHARGE）",
+    deprecated: true,
   })
   @IsOptional()
   @IsInt()
@@ -170,6 +191,12 @@ export class AdjustTeamDto {
   @IsInt()
   @Min(1)
   extendDays?: number
+
+  @ApiPropertyOptional({ example: "客户投诉补偿", description: "调整备注（写入流水与团队审计）" })
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  reason?: string
 }
 
 /** 恢复团队（GRACE/ARCHIVED → ACTIVE，按天数重算有效期） */

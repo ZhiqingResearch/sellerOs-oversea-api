@@ -10,6 +10,10 @@ export const OPEN_API_APP_HELP = `用法：
   create-open-api-app.ts --revoke-keyb <appId> selleros
   create-open-api-app.ts --grant-niuniu-plan <appId>
   create-open-api-app.ts --revoke-niuniu-plan <appId>
+  create-open-api-app.ts --grant-automotive-audit <appId>
+  create-open-api-app.ts --revoke-automotive-audit <appId>
+  create-open-api-app.ts --grant-computer-audit <appId>
+  create-open-api-app.ts --revoke-computer-audit <appId>
   create-open-api-app.ts --help
 
 创建时不加 --keyb-project 则不授予 KeyB 扣费权限。
@@ -18,11 +22,15 @@ export const OPEN_API_APP_HELP = `用法：
 appSecret 仅在创建成功时输出，请立即安全保存。`
 
 export type OpenApiAppCommand =
+  | { action: "grant-computer-audit"; appId: string }
+  | { action: "revoke-computer-audit"; appId: string }
   | { action: "help" }
   | { action: "list" }
   | { action: "disable"; appId: string }
   | { action: "grant-niuniu-plan"; appId: string }
   | { action: "revoke-niuniu-plan"; appId: string }
+  | { action: "grant-automotive-audit"; appId: string }
+  | { action: "revoke-automotive-audit"; appId: string }
   | { action: "grant-keyb"; appId: string; projectCode: string }
   | { action: "revoke-keyb"; appId: string; projectCode: string }
   | { action: "create"; name: string; perCallMaxCny: number | null; keybProjectCodes: string[] }
@@ -44,6 +52,28 @@ function validateProjectCode(projectCode: string): string {
 }
 
 export function parseOpenApiAppArgs(args: string[]): OpenApiAppCommand {
+  if (
+    ["--grant-computer-audit", "--revoke-computer-audit"].includes(args[0]) &&
+    args.length === 2
+  ) {
+    return {
+      action:
+        args[0] === "--grant-computer-audit" ? "grant-computer-audit" : "revoke-computer-audit",
+      appId: validateAppId(args[1]),
+    }
+  }
+  if (
+    ["--grant-automotive-audit", "--revoke-automotive-audit"].includes(args[0]) &&
+    args.length === 2
+  ) {
+    return {
+      action:
+        args[0] === "--grant-automotive-audit"
+          ? "grant-automotive-audit"
+          : "revoke-automotive-audit",
+      appId: validateAppId(args[1]),
+    }
+  }
   if (["--grant-niuniu-plan", "--revoke-niuniu-plan"].includes(args[0]) && args.length === 2) {
     return {
       action: args[0] === "--grant-niuniu-plan" ? "grant-niuniu-plan" : "revoke-niuniu-plan",
@@ -121,6 +151,8 @@ export async function runOpenApiAppCommand(
         perCallMaxCny: true,
         keybProjectCodes: true,
         isNiuniuOperationPlanEnabled: true,
+        isAutomotiveAuditEnabled: true,
+        isComputerAuditEnabled: true,
         createdAt: true,
       },
       orderBy: { id: "asc" },
@@ -141,6 +173,26 @@ export async function runOpenApiAppCommand(
     })
     if (!result.count) throw new OpenApiAppCliError(`接入方不存在：${command.appId}`)
     output.log(`已停用：${command.appId}`)
+    return
+  }
+  if (command.action === "grant-computer-audit" || command.action === "revoke-computer-audit") {
+    const result = await prisma.openApiApp.updateMany({
+      where: { appId: command.appId },
+      data: { isComputerAuditEnabled: command.action === "grant-computer-audit" },
+    })
+    if (!result.count) throw new OpenApiAppCliError(`接入方不存在：${command.appId}`)
+    output.log(`电脑审计权限已更新：${command.appId}`)
+    return
+  }
+  if (command.action === "grant-automotive-audit" || command.action === "revoke-automotive-audit") {
+    const result = await prisma.openApiApp.updateMany({
+      where: { appId: command.appId },
+      data: { isAutomotiveAuditEnabled: command.action === "grant-automotive-audit" },
+    })
+    if (!result.count) throw new OpenApiAppCliError(`接入方不存在：${command.appId}`)
+    output.log(
+      `${command.action === "grant-automotive-audit" ? "已开通" : "已关闭"}汽配审计：${command.appId}`
+    )
     return
   }
   if (command.action === "grant-niuniu-plan" || command.action === "revoke-niuniu-plan") {

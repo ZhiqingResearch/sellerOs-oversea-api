@@ -14,6 +14,7 @@ describe("WalletService.listTransactions", () => {
     receipt: { findMany: jest.Mock }
     teamMember: { findFirst: jest.Mock; findMany: jest.Mock }
     listingRun: { findMany: jest.Mock }
+    $queryRaw: jest.Mock
   }
 
   beforeEach(async () => {
@@ -35,6 +36,7 @@ describe("WalletService.listTransactions", () => {
         findMany: jest.fn().mockResolvedValue([]),
       },
       listingRun: { findMany: jest.fn().mockResolvedValue([]) },
+      $queryRaw: jest.fn().mockResolvedValue([]),
     }
     const module = await Test.createTestingModule({
       providers: [
@@ -709,6 +711,34 @@ describe("WalletService.listTransactions", () => {
     expect(res.items.map(item => item.source)).toEqual(["listing.score", "listing.generate"])
   })
 
+  it.each([undefined, "listing.generate", "listing.score"].flatMap(source => ["optimization", "generation"].map(operation => ({ source, operation }))))("历史自动评分归回 $operation 主业务，独立评分不受影响（筛选 $source）", async ({ source, operation }) => {
+    const row = (id: number, amount: string, source: string, operation: string, stepId: number) => ({
+      id, userId: 1, direction: "DEBIT", bucket: "RECHARGE", type: CreditTxnType.CONSUME,
+      amount: new Decimal(amount), balanceAfter: new Decimal(1000 - id), source, relatedUserId: null, teamId: null,
+      meta: { businessEventId: "run", usageChargeId: `charge-${id}`, listingStepId: stepId, operation, pricing: "fixed_module" },
+      createdAt: new Date(`2026-11-02T07:25:${id - 900}.000Z`),
+    })
+    const allRows = [row(905, "15", "listing.score", "score", 205),
+      row(904, "15", "listing.score", "score", 204), row(903, "5", "listing.generate", operation, 203),
+      row(902, "15", "listing.score", "score", 202), row(901, "5", "listing.generate", operation, 201),
+      row(900, "25", "listing.generate", "generation", 200)]
+    prisma.$queryRaw.mockResolvedValue([201, 203].map(mainStepId => ({
+      mainStepId: BigInt(mainStepId), operation, scoreStepId: BigInt(mainStepId + 1), runId: "run",
+    })))
+    prisma.creditTransaction.findMany.mockResolvedValueOnce(allRows).mockResolvedValueOnce(
+      source === "listing.score" ? [allRows[0]] : source === "listing.generate" ? allRows.slice(1) : allRows)
+    const res = await service.listTransactions(1, { page: 1, pageSize: 10, direction: "DEBIT", source } as never)
+    expect(res.total).toBe(source ? 1 : 2)
+    const generation = res.items.find(item => item.source === "listing.generate")
+    if (source !== "listing.score") {
+      expect(generation?.amount.toString()).toBe("65")
+      expect(generation?.businessDetails?.map(item => item.amount.toString())).toEqual(["25", "20", "20"])
+      expect(generation?.businessDetails?.map(item => (item.meta as any).operation)).toEqual(["generation", operation, operation])
+      expect(generation?.businessDetails?.reduce((sum, item) => sum + Number(item.amount), 0)).toBe(65)
+    }
+    if (source !== "listing.generate") expect(res.items.find(item => item.source === "listing.score")?.amount.toString()).toBe("15")
+  })
+
   it("旧 Listing 流水：通过 listingHistoryId/listingRunId 关联成同一条父记录", async () => {
     const row = (id: number, meta: Record<string, unknown>) => ({
       id,
@@ -1011,13 +1041,14 @@ describe("WalletService.listTransactions", () => {
       pageSize: 10,
       consumeSource: "OWN_PACKAGE",
     } as never)
-    // 个人套餐积分 = 消费扣 PACKAGE ∪ 客服补偿扣回（赠送层合池扣减，bucket=null）
+    // 个人套餐积分 = 消费/后台扣减 PACKAGE ∪ 旧客服补偿合池扣回（bucket=null）
     expect(andOf()).toContainEqual({
       userId: 3,
       relatedUserId: null,
       teamId: null, // 个人侧（池行归 TEAM_*，不串扰）
       OR: [
         { type: CreditTxnType.CONSUME, bucket: "PACKAGE" },
+        { type: CreditTxnType.MANUAL_ADJUST, direction: "DEBIT", bucket: "PACKAGE" },
         { type: CreditTxnType.MANUAL_ADJUST, direction: "DEBIT", bucket: null },
       ],
     })
@@ -1076,28 +1107,30 @@ describe("WalletService.listTransactions", () => {
     ])
   })
 
-  it("企业池调整扣减行（MANUAL_ADJUST/DEBIT/teamId）→ 企业充值积分", async () => {
+  it("企业池调整扣减行（MANUAL_ADJUST/DEBIT/teamId）→ 按真实桶归类", async () => {
     prisma.user.findUnique.mockResolvedValue({ canInvite: false, invitedById: null })
     prisma.creditTransaction.findMany.mockResolvedValue([
-      {
-        id: 304,
+      ...["RECHARGE", "PACKAGE", "GIFT"].map((bucket, i) => ({
+        id: 304 + i,
         userId: 3,
         direction: "DEBIT",
-        bucket: "RECHARGE",
+        bucket,
         type: CreditTxnType.MANUAL_ADJUST,
         amount: "100",
         balanceAfter: "9900",
         source: "admin.team.adjust",
         relatedUserId: null,
         teamId: 10,
-        meta: null,
+        meta: { adminAdjustment: true, creditType: bucket },
         createdAt: new Date(),
-      },
+      })),
     ])
     const res = await service.listTransactions(3, { page: 1, pageSize: 10 })
-    expect(res.items[0].consumeSource).toBe("TEAM_RECHARGE")
-    expect(res.items[0].consumeSourceLabel).toBe("企业充值积分")
-    expect(res.items[0].title).toBe("企业池调整")
+    expect(res.items.map(i => [i.consumeSource, i.consumeSourceLabel, i.title])).toEqual([
+      ["TEAM_RECHARGE", "企业充值积分", "企业充值积分扣减"],
+      ["TEAM_PACKAGE", "企业套餐积分", "企业套餐积分扣减"],
+      ["TEAM_GIFT", "企业赠送积分", "企业赠送积分扣减"],
+    ])
   })
 
   it("企业管理员 consumeSource=TEAM_PACKAGE → 本企业全部池行（teamId 约束）", async () => {
@@ -1109,8 +1142,11 @@ describe("WalletService.listTransactions", () => {
     } as never)
     expect(andOf()).toContainEqual({
       teamId: 7,
-      type: CreditTxnType.TEAM_CONSUME,
       bucket: "PACKAGE",
+      OR: [
+        { type: CreditTxnType.TEAM_CONSUME },
+        { type: CreditTxnType.MANUAL_ADJUST, direction: "DEBIT" },
+      ],
     })
   })
 
@@ -1141,8 +1177,11 @@ describe("WalletService.listTransactions", () => {
     expect(andOf()).toContainEqual({
       userId: 3,
       teamId: { not: null },
-      type: CreditTxnType.TEAM_CONSUME,
       bucket: "GIFT",
+      OR: [
+        { type: CreditTxnType.TEAM_CONSUME },
+        { type: CreditTxnType.MANUAL_ADJUST, direction: "DEBIT" },
+      ],
     })
   })
 

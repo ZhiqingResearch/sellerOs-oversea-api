@@ -1,3 +1,4 @@
+jest.mock("../../generation-record/generation-record-success", () => ({ recordGenerationSuccess: jest.fn().mockResolvedValue(undefined) }))
 import { ConflictException, NotFoundException } from "@nestjs/common"
 import { AsinAuditRecordStatus } from "@prisma/client"
 import { hashJson } from "../../common/utils/canonical-json"
@@ -6,9 +7,34 @@ import { CreateAsinAuditRecordDto } from "./dto/create-asin-audit-record.dto"
 import { UpdateAsinAuditRecordDto } from "./dto/update-asin-audit-record.dto"
 
 describe("AsinAuditRecordService", () => {
+  it("preserves mixed provider evidence in the immutable score snapshot and detail", async () => {
+    const { service, tx } = createService()
+    const dto = createDto()
+    dto.evidence.D = { group: { source: "xiyou", status: "partial", fallbackReason: "主数据源暂不可用", period: { startDate: "2026-09-28", endDate: "2026-10-27" } } }
+    dto.evidence.E = { groups: { price: { source: "sif" }, orders: { source: "xiyou" } }, ordersLast30Days: 50 }
+    dto.evidence.meta = { sources: { D: ["xiyou"], E: ["sif", "xiyou", "upload"] } }
+    let saved: Record<string, unknown> = {}
+    tx.asinAuditRecord.create.mockImplementation((args: { data: Record<string, unknown> }) => {
+      saved = { id: "b9912892-6909-468c-a252-6a40ec697d5a", version: 1, status: AsinAuditRecordStatus.SCORED, createdAt: new Date(), updatedAt: new Date(), ...args.data }
+      return Promise.resolve(saved)
+    })
+    await service.create(7, dto)
+    const snapshot = (saved.scoreSnapshot as { create: { evidence: unknown } }).create
+    expect(snapshot.evidence).toEqual(dto.evidence)
+    tx.asinAuditRecord.findFirst.mockResolvedValue(saved)
+    tx.asinAuditScoreSnapshot.findUnique.mockResolvedValue(snapshot)
+    expect((await service.findOne(7, String(saved.id))).evidence).toEqual(dto.evidence)
+  })
+
   it("creates the main record and immutable score snapshot in one transaction", async () => {
     const { service, prisma, tx } = createService()
     const dto = createDto()
+    const billingMeta = {
+      stage: "score",
+      resultHash: hashJson(dto.scoreResult),
+      model: "score-model",
+    }
+    tx.usageLog.findMany.mockResolvedValue([{ id: 12834, meta: billingMeta }])
     const now = new Date("2026-08-25T08:00:00.000Z")
     tx.asinAuditRecord.create.mockImplementation((args: { data: Record<string, unknown> }) =>
       Promise.resolve({
@@ -46,6 +72,34 @@ describe("AsinAuditRecordService", () => {
         },
       },
     })
+    const usageQuery = tx.usageLog.findMany.mock.calls[0] as unknown as [
+      { where: { userId: number; source: string; AND: unknown[] } },
+    ]
+    expect(usageQuery[0].where).toMatchObject({ userId: 7, source: "asin.audit" })
+    expect(usageQuery[0].where.AND).toContainEqual({
+      OR: [{ meta: { path: "$.resultHash", equals: hashJson(dto.scoreResult) } }],
+    })
+    expect(tx.usageLog.updateMany).toHaveBeenCalledWith({
+      where: { id: 12834, meta: { equals: billingMeta } },
+      data: { meta: { ...billingMeta, recordId: result.recordId } },
+    })
+  })
+
+  it("does not attach a result when identical output has multiple unlinked charges", async () => {
+    const { service, tx } = createService()
+    tx.asinAuditRecord.create.mockResolvedValue({
+      id: "report-1",
+      version: 1,
+      status: "SCORED",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+    tx.usageLog.findMany.mockResolvedValue([
+      { id: 1, meta: { stage: "score" } },
+      { id: 2, meta: { stage: "score" } },
+    ])
+    await service.create(7, createDto())
+    expect(tx.usageLog.updateMany).not.toHaveBeenCalled()
   })
 
   it("returns the existing record for an identical create retry", async () => {
@@ -123,6 +177,12 @@ describe("AsinAuditRecordService", () => {
         itemHighlights: ["Key feature", "Supported specification"],
       },
     }
+    const billingMeta = {
+      stage: "optimize",
+      resultHash: hashJson(dto.optimizationResult),
+      model: "opt-model",
+    }
+    tx.usageLog.findMany.mockResolvedValue([{ id: 12837, meta: billingMeta }])
     const result = await service.optimize(7, "b9912892-6909-468c-a252-6a40ec697d5a", dto)
 
     expect(result).toMatchObject({ version: 2, optimizationRevision: 1, changed: true })
@@ -141,6 +201,10 @@ describe("AsinAuditRecordService", () => {
       status: AsinAuditRecordStatus.OPTIMIZED,
       version: { increment: 1 },
       latestOptimizationRevision: 1,
+    })
+    expect(tx.usageLog.updateMany).toHaveBeenCalledWith({
+      where: { id: 12837, meta: { equals: billingMeta } },
+      data: { meta: { ...billingMeta, recordId: "b9912892-6909-468c-a252-6a40ec697d5a", revisionId: 1 } },
     })
   })
 
@@ -308,6 +372,10 @@ describe("AsinAuditRecordService", () => {
 
 function createService() {
   const tx = {
+    usageLog: {
+      findMany: jest.fn().mockResolvedValue([]),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    },
     $queryRaw: jest.fn(),
     asinAuditRecord: {
       create: jest.fn(),
@@ -316,7 +384,7 @@ function createService() {
     },
     asinAuditScoreSnapshot: { findUnique: jest.fn() },
     asinAuditOptimizationRevision: {
-      create: jest.fn(),
+      create: jest.fn().mockResolvedValue({ id: 1 }),
       findUnique: jest.fn(),
     },
   }

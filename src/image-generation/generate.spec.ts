@@ -1,3 +1,4 @@
+jest.mock("../generation-record/generation-record-success", () => ({ recordGenerationSuccess: jest.fn().mockResolvedValue(undefined) }))
 // src/image-generation/generate.spec.ts
 //
 // 主生图(generate)链路单测(mock Prisma + mock Provider + 假 Spaces transport
@@ -14,7 +15,6 @@
 
 import { Test } from "@nestjs/testing";
 import { AiGatewayProvider } from "../ai-gateway/ai-gateway.provider";
-import sharp from "sharp"
 import { Decimal } from "@prisma/client/runtime/library";
 import sharp from "sharp";
 import { ImageProjectService } from "../image-project/image-project.service";
@@ -385,6 +385,42 @@ describe("generate create (contract parity)", () => {
 // ─── prompt 编译 + 建任务载荷 ────────────────────────────────────────────────
 
 describe("generate create (prompt compilation + task payload)", () => {
+  it.each(["off", "on"])("%s 编译器在覆盖提示词后注入完整清单并冻结原文", async structured => {
+    const previous = process.env.IMAGE_PROMPT_STRUCTURED;
+    process.env.IMAGE_PROMPT_STRUCTURED = structured;
+    try {
+      const forbiddenContent = "  # 禁止\n- best seller\n";
+      const imageProject = { createTask: jest.fn().mockResolvedValue(makeTaskRecord()) };
+      const { generate, prisma } = await makeServices({ imageProject });
+      const result = await generate.create({ form: makeCreationForm({
+        promptOverride: "生成海报", targetLanguage: "none", productInfo: { forbiddenContent },
+      }), files: {} }, 7);
+      expect(result.ok).toBe(true);
+      const spec = prisma.generationTask.update.mock.calls[0][0].data.executionSpec;
+      expect(spec.form.productInfo.forbiddenContent).toBe(forbiddenContent);
+      expect(spec.taskPrompt).toContain(forbiddenContent);
+      expect(spec.taskPrompt.match(/【禁用词与内容约束】/g)).toHaveLength(1);
+    } finally {
+      if (previous === undefined) delete process.env.IMAGE_PROMPT_STRUCTURED;
+      else process.env.IMAGE_PROMPT_STRUCTURED = previous;
+    }
+  });
+
+  it.each([null, 123, "x".repeat(20001)])("无效清单返回中文错误且不建任务（%#）", async forbiddenContent => {
+    const { generate, imageProject } = await makeServices();
+    expect(await generate.create({ form: makeCreationForm({ productInfo: { forbiddenContent } }), files: {} }, 7))
+      .toMatchObject({ ok: false, status: 400, error: expect.stringContaining("禁用词与内容") });
+    expect(imageProject.createTask).not.toHaveBeenCalled();
+  });
+
+  it("显式空串冻结清空值，不追加约束", async () => {
+    const imageProject = { createTask: jest.fn().mockResolvedValue(makeTaskRecord()) };
+    const { generate, prisma } = await makeServices({ imageProject });
+    await generate.create({ form: makeCreationForm({ productInfo: { forbiddenContent: "" } }), files: {} }, 7);
+    const spec = prisma.generationTask.update.mock.calls[0][0].data.executionSpec;
+    expect(spec.form.productInfo.forbiddenContent).toBe("");
+    expect(spec.taskPrompt).not.toContain("【禁用词与内容约束】");
+  });
   it("image-creation default: legacy creation prompt, refs uploaded, exact createTask payload", async () => {
     const prisma = mockPrisma();
     const imageProject = {
@@ -927,6 +963,27 @@ function taskRow(over: Record<string, unknown> = {}) {
 }
 
 describe("generation task runner", () => {
+  it.each(["image-creation", "product-image"] as const)("%s 每张执行使用原快照清单", async mode => {
+    const prisma = mockPrisma();
+    const forbiddenContent = "- best seller";
+    const spec = specFixture({ mode, referenceUrls: [], taskPrompt: "COMPILED\n" + forbiddenContent });
+    spec.form.productInfo = { forbiddenContent };
+    prisma.generatedImage.updateMany.mockResolvedValue({ count: 1 });
+    prisma.generatedImage.findUnique.mockImplementation(({ where }) => Promise.resolve({
+      id: where.id, order: where.id - 10, status: "GENERATING", task: taskRow({ executionSpec: spec }),
+    }));
+    prisma.generationTask.findUnique.mockResolvedValue(taskRow({ generatedImages: [{ status: "SUCCESS" }] }));
+    const generate = jest.fn().mockResolvedValue({ url: "data:image/png;base64,AA==" });
+    const { runner } = await makeServices({ prisma, provider: { generate } });
+    await runner.executeGeneratedImage(10);
+    await runner.executeGeneratedImage(11);
+    expect(generate).toHaveBeenCalledTimes(2);
+    for (const [input] of generate.mock.calls) {
+      expect(input.prompt).toContain(forbiddenContent);
+      expect(input.prompt.match(/best seller/g)).toHaveLength(1);
+    }
+    expect(prisma.imageProject.findUnique).not.toHaveBeenCalled();
+  });
   it("网关原生支持时即使存在交付计划也托管原图，不执行 finalize", async () => {
     const prisma = mockPrisma();
     prisma.generatedImage.updateMany.mockResolvedValue({ count: 1 });
@@ -1546,8 +1603,11 @@ describe("generate server-side retry (refresh-safe)", () => {
 
   it("retries all FAILED images from the frozen spec: resets images + task, extends deadline, re-dispatches", async () => {
     const prisma = mockPrisma();
+    const spec = specFixture({ taskPrompt: "原任务约束 - best seller" });
+    spec.form.productInfo = { forbiddenContent: "- best seller" };
     prisma.generationTask.findUnique.mockResolvedValueOnce(
       taskRow({
+        executionSpec: spec,
         status: "CANCELLED",
         errorMessage: "所有图片生成失败",
         generatedImages: failedImages,
@@ -1578,6 +1638,9 @@ describe("generate server-side retry (refresh-safe)", () => {
     expect(taskUpdate.data.status).toBe("GENERATING");
     expect(taskUpdate.data.errorMessage).toBeNull();
     expect(taskUpdate.data.deadlineAt.getTime()).toBeGreaterThan(Date.now());
+    expect(taskUpdate.data).not.toHaveProperty("executionSpec");
+    expect(spec.form.productInfo.forbiddenContent).toBe("- best seller");
+    expect(prisma.imageProject.findUnique).not.toHaveBeenCalled();
     // 派发:非 openai-gpt-image → 每图一个任务。
     expect(queue.enqueue).toHaveBeenCalledTimes(1);
   });

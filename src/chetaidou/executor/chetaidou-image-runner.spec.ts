@@ -1,3 +1,5 @@
+jest.mock("../../generation-record/generation-record-success", () => ({ recordGenerationSuccess: jest.fn().mockResolvedValue(undefined) }))
+import { UpstreamQuotaError, UPSTREAM_QUOTA_CODE } from "../../common/errors/upstream-quota"
 import sharp from "sharp"
 import { planChetaidouImage } from "../chetaidou-image-options.service"
 import { ChetaidouStorageService, OriginalImageAsset } from "../chetaidou-storage.service"
@@ -306,4 +308,18 @@ describe("车泰斗生图请求冻结与准备失败", () => {
       expect(gateway.getImageTask).not.toHaveBeenCalled()
     }
   })
+  it("图片提交明确额度拒绝记免费终态，不混入未知状态或交付成功", async () => {
+    const { service, ctx, gateway, db, deliver, fail } = setup({
+      models: { image: { publicId: "frozen-model" } }, generation: { providerApplied: { size: "1024x1024" } },
+    })
+    gateway.createImageTask.mockRejectedValue(new UpstreamQuotaError("ai-gateway"))
+    await service["submitAndWait"](ctx as any)
+    expect(db.chetaidouCall.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
+      state: "FINISHED", billingStatus: "FREE", errorCode: UPSTREAM_QUOTA_CODE,
+      errorMessage: "该项数据未获取，未扣除积分",
+    }) }))
+    expect(deliver).not.toHaveBeenCalled()
+    expect(fail).toHaveBeenCalledWith("job")
+  })
+
 })

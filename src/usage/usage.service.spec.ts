@@ -46,6 +46,7 @@ describe("UsageService", () => {
     consumeCredits: jest.Mock
     getWallet: jest.Mock
     assertAffordable: jest.Mock
+    consumableBalance: jest.Mock
     getConsumableBalance: jest.Mock
     teamPoolBalance: jest.Mock
     lockPersonalBalancesInTx: jest.Mock
@@ -63,6 +64,45 @@ describe("UsageService", () => {
     quotaMonth: null,
     team: { quotaMode: "SHARED", overLimitPolicy: "WARN", discount: new Decimal(1) },
     ...over,
+  })
+
+  it("已有零价调用无需预检余额", async () => {
+    await expect(service.assertExactCreditsAffordable(7, 0)).resolves.toBeUndefined()
+    expect(credit.assertAffordable).not.toHaveBeenCalled()
+    expect(prisma.teamMember.findFirst).not.toHaveBeenCalled()
+  })
+  it("固定积分预检个人沿用邀请人共享路由", async () => {
+    await service.assertExactCreditsAffordable(7, 40)
+    expect(credit.assertAffordable).toHaveBeenCalledWith(7, new Decimal(4), new Decimal(40))
+  })
+  it("固定积分预检 SHARED+BLOCK 达限后只能个人充值兜底", async () => {
+    prisma.teamMember.findFirst.mockResolvedValue(
+      memberCtx(1, {
+        monthlyQuota: new Decimal(20),
+        quotaUsedThisMonth: new Decimal(20),
+        quotaMonth: quotaMonthOf(),
+        team: { quotaMode: "SHARED", overLimitPolicy: "BLOCK" },
+      })
+    )
+    credit.teamPoolBalance.mockResolvedValue(new Decimal(1000))
+    credit.consumableBalance
+      .mockResolvedValueOnce(new Decimal(10))
+      .mockResolvedValueOnce(new Decimal(5))
+    await expect(service.assertExactCreditsAffordable(7, 40)).rejects.toThrow("积分余额不足")
+    credit.consumableBalance
+      .mockResolvedValueOnce(new Decimal(10))
+      .mockResolvedValueOnce(new Decimal(30))
+    await expect(service.assertExactCreditsAffordable(7, 40)).resolves.toBeUndefined()
+  })
+  it("独立配额不足预检不因池充足而放行", async () => {
+    prisma.teamMember.findFirst.mockResolvedValue(
+      memberCtx(1, {
+        monthlyQuota: new Decimal(20),
+        team: { quotaMode: "INDEPENDENT", overLimitPolicy: "WARN" },
+      })
+    )
+    credit.teamPoolBalance.mockResolvedValue(new Decimal(1000))
+    await expect(service.assertExactCreditsAffordable(7, 40)).rejects.toThrow("已达本月使用上限")
   })
 
   it.each(["NORMAL", "REFERENCE", "MOTION_CONTROL", "STORYBOARD", "BEAUTY"])(
@@ -139,6 +179,7 @@ describe("UsageService", () => {
       }),
       getWallet: jest.fn(),
       assertAffordable: jest.fn(),
+      consumableBalance: jest.fn().mockResolvedValue(new Decimal(0)),
       getConsumableBalance: jest.fn().mockResolvedValue(new Decimal(0)),
       teamPoolBalance: jest.fn(),
       // 混合扣费预读默认：个人余额全 0 + 池充足 → 纯企业段（与老用例口径一致）；混合场景按需覆盖

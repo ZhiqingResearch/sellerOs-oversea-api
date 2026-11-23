@@ -1,3 +1,4 @@
+import { UpstreamQuotaError } from "../common/errors/upstream-quota"
 import { BadRequestException, ServiceUnavailableException } from "@nestjs/common"
 import { Decimal } from "@prisma/client/runtime/library"
 import { AiGatewayProvider } from "../ai-gateway/ai-gateway.provider"
@@ -395,4 +396,10 @@ describe("LlmToolboxService（模型/一口价走 AiGatewayModel 类目解析）
       })
     })
   })
+  it("网关额度拒绝时提示未扣积分，保持用户余额预检与扣费分离", async () => {
+    gateway.completeMultimodal.mockRejectedValue(new UpstreamQuotaError("ai-gateway"))
+    await expect(service.enhance(7, { prompt: "一只猫" })).rejects.toThrow("数据未获取，未扣除积分")
+    expect(usage.chargeModel).not.toHaveBeenCalled()
+  })
+
 })

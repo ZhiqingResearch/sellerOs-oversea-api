@@ -554,31 +554,9 @@ export class UsageService {
       })
       if (paid) return { credits: 0 }
     }
-    const credits = new Decimal(getFixedModuleCredits(source, operation, quantity))
-    const billing = await this.resolveActiveBilling(this.prisma, userId)
-    if (!billing) {
-      await this.credit.assertAffordable(userId, credits.div(CREDIT_PER_CNY), credits)
-      return { credits: credits.toNumber() }
-    }
-    const [gift, recharge, pool] = await Promise.all([
-      this.credit.consumableBalance(this.prisma, userId, GIFT_LAYER_BUCKETS),
-      this.credit.consumableBalance(this.prisma, userId, [CreditBucket.RECHARGE]),
-      this.credit.teamPoolBalance(billing.teamId),
-    ])
-    const rest = Decimal.max(0, credits.minus(Decimal.max(0, gift)))
-    const poolTake = Decimal.min(
-      Decimal.max(0, pool),
-      rest,
-      this.teamQuotaCapCredits(billing) ?? rest
-    )
-    if (poolTake.greaterThan(0) && billing.team.quotaMode === TeamQuotaMode.INDEPENDENT) {
-      const used = billing.quotaMonth === quotaMonthOf() ? billing.quotaUsedThisMonth : ZERO
-      if (billing.monthlyQuota == null || poolTake.plus(used).greaterThan(billing.monthlyQuota))
-        throw new BadRequestException("已达本月使用上限，请联系企业管理员调整额度")
-    }
-    if (rest.minus(poolTake).greaterThan(Decimal.max(0, recharge)))
-      throw new BadRequestException(`积分余额不足，本次需要 ${credits.toString()} 积分`)
-    return { credits: credits.toNumber() }
+    const credits = getFixedModuleCredits(source, operation, quantity)
+    await this.assertExactCreditsAffordable(userId, credits)
+    return { credits }
   }
 
   async chargeFixedModule(
@@ -966,14 +944,33 @@ export class UsageService {
     credits: Decimal | string | number
   ): Promise<void> {
     const required = new Decimal(credits)
+    if (!required.isFinite() || required.lessThan(0))
+      throw new BadRequestException("积分不能小于 0")
+    if (required.isZero()) return
     const billing = await this.resolveActiveBilling(this.prisma, userId)
-    const [personal, pool] = await Promise.all([
-      this.credit.getConsumableBalance(userId),
-      billing ? this.credit.teamPoolBalance(billing.teamId) : Promise.resolve(ZERO),
-    ])
-    if (personal.plus(pool).lessThan(required)) {
-      throw new BadRequestException(`积分余额不足，本次需 ${required.toString()} 积分`)
+    if (!billing) {
+      await this.credit.assertAffordable(userId, required.div(CREDIT_PER_CNY), required)
+      return
     }
+    const [gift, recharge, pool] = await Promise.all([
+      this.credit.consumableBalance(this.prisma, userId, GIFT_LAYER_BUCKETS),
+      this.credit.consumableBalance(this.prisma, userId, [CreditBucket.RECHARGE]),
+      this.credit.teamPoolBalance(billing.teamId),
+    ])
+    const rest = Decimal.max(0, required.minus(Decimal.max(0, gift)))
+    const poolTake = Decimal.min(
+      Decimal.max(0, pool),
+      rest,
+      this.teamQuotaCapCredits(billing) ?? rest
+    )
+    if (poolTake.greaterThan(0) && billing.team.quotaMode === TeamQuotaMode.INDEPENDENT) {
+      const used = billing.quotaMonth === quotaMonthOf() ? billing.quotaUsedThisMonth : ZERO
+      if (billing.monthlyQuota == null || poolTake.plus(used).greaterThan(billing.monthlyQuota))
+        throw new BadRequestException("已达本月使用上限，请联系企业管理员调整额度")
+    }
+    if (rest.minus(poolTake).greaterThan(Decimal.max(0, recharge)))
+      throw new BadRequestException(`积分余额不足，本次需要 ${required.toString()} 积分`)
+    return
   }
 
   /** 余额预检路由：归属 active 企业 → 与 consumeRouted 同口径校验（个人可消费+企业池合计；池/配额不足会落个人段兜底），否则个人（含邀请人共享额度） */

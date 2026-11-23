@@ -664,11 +664,13 @@ export class WalletService {
     // 成员的个人侧流水（个人充值/个人段消费）不对管理员暴露——池行以 teamId 界定。
     const teamAdminId = await this.resolveTeamAdminTeamId(userId)
 
+    const hasListingSourceFilter = direction !== CreditDirection.CREDIT &&
+      (source === "listing.generate" || source === "listing.score")
     // 通用筛选（方向/来源/类型/时间）。返利入账/提现独立核算，未显式按 type 查询时排除。
     // type=MANUAL_ADJUST/GIFT_COMPENSATE 走拆分口径（手动调整不含正向补偿发放，赠送=仅正向补偿）。
     const common: Prisma.CreditTransactionWhereInput = {
       ...(direction && { direction }),
-      ...(source && { source: { contains: source } }),
+      ...(source && { source: hasListingSourceFilter ? { in: ["listing.generate", "listing.score"] } : { contains: source } }),
       ...(type
         ? rechargeTypeFilterWhere(type)
         : { type: { notIn: [CreditTxnType.REBATE_IN, CreditTxnType.REBATE_WITHDRAW] } }),
@@ -761,6 +763,17 @@ export class WalletService {
     let selectedUnitKeys: string[] = []
     const selectedBusinessKeys = new Set<string>()
     const listingRunIdsByHistoryId = new Map<number, string>()
+    const autoScoreParents = new Map<number, { mainStepId: number; operation: string; runId: string }>()
+    const normalizeListingRow = <T extends { source: string | null; meta: Prisma.JsonValue | null }>(row: T): T => {
+      const meta = transactionMeta(row.meta)
+      const parent = row.source === "listing.score" && typeof meta.listingStepId === "number"
+        ? autoScoreParents.get(meta.listingStepId) : undefined
+      if (!parent) return row
+      return { ...row, source: "listing.generate", meta: {
+        ...meta, operation: parent.operation, businessEventId: parent.runId,
+        listingBillingStepId: parent.mainStepId,
+      } }
+    }
     if (direction === CreditDirection.CREDIT) {
       ;[rows, total] = await Promise.all([
         this.prisma.creditTransaction.findMany({
@@ -774,11 +787,43 @@ export class WalletService {
       ])
     } else {
       // 轻量全量扫描（只取 id/teamId/meta）找事件章；无事件章落回老路径
-      const scan = await this.prisma.creditTransaction.findMany({
+      let scan = await this.prisma.creditTransaction.findMany({
         where,
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         select: { id: true, teamId: true, source: true, meta: true },
       })
+      const scoreStepIds = [...new Set(scan.filter(row => row.source === "listing.score")
+        .map(row => transactionMeta(row.meta).listingStepId)
+        .filter((id): id is number => typeof id === "number" && Number.isSafeInteger(id)))]
+      if (scoreStepIds.length) {
+        // 只有后台任务明确关联的自动评分才归回主业务；同 runId 的独立评分仍保持独立。
+        // 只读取关联字段，避免把任务中的长提示词/图片输入载入积分明细接口。
+        const parents = await this.prisma.$queryRaw<Array<{
+          mainStepId: number | bigint; scoreStepId: number | bigint; operation: string; runId: string
+        }>>(Prisma.sql`
+          SELECT task.mainStepId,
+            CAST(JSON_UNQUOTE(JSON_EXTRACT(task.input, '$.autoScoreStepId')) AS UNSIGNED) AS scoreStepId,
+            JSON_UNQUOTE(JSON_EXTRACT(task.input, '$.main.operation')) AS operation,
+            run.runId
+          FROM ListingGenerationTask task
+          INNER JOIN ListingRun run ON run.id = task.listingRunId
+          WHERE task.listingRunId IN (
+            SELECT listingRunId FROM ListingAiStep WHERE id IN (${Prisma.join(scoreStepIds)})
+          )
+          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(task.input, '$.autoScoreStepId')) AS UNSIGNED)
+            IN (${Prisma.join(scoreStepIds)})
+        `)
+        for (const parent of parents) {
+          if (parent.operation === "optimization" || parent.operation === "generation")
+            autoScoreParents.set(Number(parent.scoreStepId), { ...parent, mainStepId: Number(parent.mainStepId) })
+        }
+      }
+      scan = scan.map(normalizeListingRow)
+      if (hasListingSourceFilter) {
+        scan = scan.filter(row => row.source === source)
+        // 后续分页查询也使用归类后的 ID 集合，独立评分筛选不会再次带回自动评分。
+        and.push({ id: { in: scan.map(row => row.id) } })
+      }
       const listingHistoryIds = [
         ...new Set(
           scan
@@ -899,7 +944,7 @@ export class WalletService {
             })
           : []
         const unitOrder = new Map(selectedUnitKeys.map((key, index) => [key, index] as const))
-        rows = fetched.sort((a, b) => {
+        rows = fetched.map(normalizeListingRow).sort((a, b) => {
           const aKey = businessEventKey(a, listingRunIdsByHistoryId) ?? consumeEventKey(a)
           const bKey = businessEventKey(b, listingRunIdsByHistoryId) ?? consumeEventKey(b)
           const unitDiff =
@@ -911,6 +956,8 @@ export class WalletService {
         })
       }
     }
+
+    rows = rows.map(normalizeListingRow)
 
     // 混合扣费事件（一笔消费个人与企业都扣）事件级聚合：同 consumeEventId 的多段行
     // （个人段/企业段各一条）汇总「事件总扣分 + 全量扣费来源」，供前端单行展示总额与
@@ -1209,8 +1256,11 @@ export class WalletService {
       const chargeGroups = new Map<string, TransactionItem[]>()
       for (const item of group) {
         const meta = transactionMeta(item.meta)
+        const billingStepId = meta.listingBillingStepId ?? meta.listingStepId
         const chargeId =
-          typeof meta.usageChargeId === "string"
+          item.source === "listing.generate" && typeof billingStepId === "number"
+            ? `listing-step:${billingStepId}`
+            : typeof meta.usageChargeId === "string"
             ? meta.usageChargeId
             : typeof meta.listingStepId === "number"
               ? `listing-step:${meta.listingStepId}`
@@ -1257,13 +1307,18 @@ export class WalletService {
     const base = { type: CreditTxnType.CONSUME }
     switch (cs) {
       case "OWN_PACKAGE":
-        // 个人套餐积分：消费扣 PACKAGE，或客服补偿扣回（PACKAGE+GIFT 赠送层合池扣减，bucket=null）
+        // 个人套餐积分：消费/后台扣减 PACKAGE；兼容旧客服补偿合池扣减 bucket=null
         return {
           userId,
           relatedUserId: null,
           teamId: null,
           OR: [
             { type: CreditTxnType.CONSUME, bucket: CreditBucket.PACKAGE },
+            {
+              type: CreditTxnType.MANUAL_ADJUST,
+              direction: CreditDirection.DEBIT,
+              bucket: CreditBucket.PACKAGE,
+            },
             { type: CreditTxnType.MANUAL_ADJUST, direction: CreditDirection.DEBIT, bucket: null },
           ],
         }
@@ -1301,17 +1356,23 @@ export class WalletService {
       case "TEAM_PACKAGE":
         return {
           ...this.teamRowsScope(userId, teamAdminId),
-          type: CreditTxnType.TEAM_CONSUME,
           bucket: CreditBucket.PACKAGE,
+          OR: [
+            { type: CreditTxnType.TEAM_CONSUME },
+            { type: CreditTxnType.MANUAL_ADJUST, direction: CreditDirection.DEBIT },
+          ],
         }
       case "TEAM_GIFT":
         return {
           ...this.teamRowsScope(userId, teamAdminId),
-          type: CreditTxnType.TEAM_CONSUME,
           bucket: CreditBucket.GIFT,
+          OR: [
+            { type: CreditTxnType.TEAM_CONSUME },
+            { type: CreditTxnType.MANUAL_ADJUST, direction: CreditDirection.DEBIT },
+          ],
         }
       case "TEAM_RECHARGE":
-        // 企业充值积分：池消费 RECHARGE 段 + 平台池调整扣减（MANUAL_ADJUST DEBIT，仅动 RECHARGE）
+        // 企业充值积分：池消费 RECHARGE 段 + 平台池调整扣减（MANUAL_ADJUST DEBIT）
         return {
           ...this.teamRowsScope(userId, teamAdminId),
           bucket: CreditBucket.RECHARGE,

@@ -27,7 +27,7 @@ describe("CompetitorEvidenceProvider", () => {
 
   it("把外部服务错误归一成安全且可操作的提示", () => {
     expect(provider._providerFailureMessage("sif", new Error("API配额已用完,联系运营顾问"))).toBe(
-      "SIF 配额已用完，请联系管理员补充额度"
+      "部分数据未获取"
     )
     expect(provider._providerFailureMessage("keepa", new Error("401 key=secret-value"))).toBe(
       "Keepa 凭证未配置或已失效，请联系管理员"
@@ -51,7 +51,7 @@ describe("CompetitorEvidenceProvider", () => {
         provider: "keepa",
         status: "failed",
         label: "Keepa 历史数据",
-        message: "Keepa 配额已用完，请联系管理员补充额度",
+        message: "部分数据未获取",
         retryable: false,
       },
     ])

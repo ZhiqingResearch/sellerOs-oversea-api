@@ -1,3 +1,4 @@
+jest.mock("../generation-record/generation-record-success", () => ({ recordGenerationSuccess: jest.fn().mockResolvedValue(undefined) }))
 import { Decimal } from "@prisma/client/runtime/library"
 import { createHash } from "node:crypto"
 import { AiGatewayProvider } from "../common/providers/ai-gateway.provider"

@@ -116,6 +116,28 @@ describe("finalizeScoreResult（v2.0 十板块）", () => {
     expect(JSON.stringify(english)).not.toMatch(/\p{Script=Han}/u)
     expect(AUDIT_BOARD_CONTRACT[0].name).toBe("搜索意图与语义匹配")
   })
+  it("configured Xiyou primary with successful SIF fallback retains original scoring", () => {
+    const mixed = structuredClone(evidence)
+    mixed.meta.primarySource = "xiyou"
+    mixed.D.group = { source: "sif", primarySource: "xiyou", status: "success", contract: "sif", fetchedAt: "2026-10-29", fallbackAttempted: true }
+    expect(finalizeScoreResult(payload(), mixed).scoring.evidenceMax).toBe(100)
+  })
+  it.each(["xiyou", "partial"])("only affected D evidence is pending: %s", mode => {
+    const mixed = structuredClone(evidence)
+    mixed.D.group = { source: mode === "xiyou" ? "xiyou" : "sif", status: mode === "partial" ? "partial" : "success", contract: mode === "xiyou" ? "xiyou-v1" : "sif", fetchedAt: "2026-10-29", fallbackAttempted: true }
+    const result = finalizeScoreResult(payload(), mixed)
+    expect(result.scoring).toMatchObject({ applicableMax: 100, evidenceMax: 80, earnedScore: 80, coverageRate: 0.8, convertedScore: 100 })
+    expect(result.boards.flatMap(board => board.items).filter(item => ["G1", "G3", "J2"].includes(item.id)).every(item => item.status === "pending" && item.score === null && !item.deductions?.length)).toBe(true)
+  })
+
+  it("E-only or C-only fallback does not force SIF D to pending", () => {
+    const mixed = structuredClone(evidence)
+    const group = { source: "xiyou" as const, status: "success" as const, contract: "xiyou-v1" as const, fetchedAt: "2026-10-29", fallbackAttempted: true }
+    mixed.C.group = group
+    mixed.E.groups = { orders: group }
+    expect(finalizeScoreResult(payload(), mixed).scoring.evidenceMax).toBe(100)
+  })
+
   it("全核验满分：V=A=100，total=100 EXCELLENT，板块/域分满分", () => {
     const r = finalizeScoreResult(payload(), evidence)
     expect(r.total).toBe(100)

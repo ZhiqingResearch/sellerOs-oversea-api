@@ -1,3 +1,24 @@
+export interface EvidenceGroup {
+  source: "sif" | "xiyou"
+  primarySource?: "sif" | "xiyou"
+  status: "success" | "partial" | "unavailable"
+  fallbackAttempted: boolean
+  fallbackReason?: string
+  primaryResult?: string
+  fallbackResult?: string
+  fetchedAt: string
+  contract: "sif" | "xiyou-v1"
+  period?: { startDate?: string; endDate?: string; completeness?: "unknown" }
+  requestedPeriod?: { startDate: string; endDate: string }
+  fetchedCount?: number
+  providerTotal?: number
+  providerCounts?: Array<{ asin: string; fetchedCount: number; providerTotal?: number }>
+  coverage?: "truncated" | "unknown"
+  missingAsins?: string[]
+  dateRangeNotice?: string
+  categoryId?: string
+}
+
 /** ASIN 审计 — D/E 证据卡类型（SIF 取证） */
 
 import type { AdCleaningEvidence } from "./ad-cleaning.types"
@@ -5,11 +26,23 @@ import type { AdCleaningEvidence } from "./ad-cleaning.types"
 export interface KeywordTrafficTopRow {
   kw: string
   searchVol: string
-  contribution: number
+  contribution: number | null
   aba: number | null
   heat: string
   ranking: string
   tags: string[]
+  traffic?: { total: number | null; organic: number | null; advertising: number | null }
+  contributingAsins?: string[]
+  weeklySearchVolume?: number | null
+  searchPeriod?: { startDate?: string; endDate?: string }
+  conversionSharePct?: number | null
+  ranks?: Array<{
+    position: string
+    page: number | null
+    pageRank: number | null
+    totalRank: number | null
+    rankTime?: string
+  }>
 }
 
 /** 流量层级打标计数（核心/腰部/长尾/机会）。 */
@@ -56,13 +89,14 @@ export interface PositionAllocationRow {
 }
 
 export interface TrafficPrecompute {
-  top10Page1Hits: number
-  homepageHitTier: { score: number; max: number; label: string }
+  pendingRules?: string[]
+  top10Page1Hits: number | null
+  homepageHitTier: { score: number; max: number; label: string } | null
   weightedNaturalPct: number | null
-  naturalHealthTier: { score: number; max: number; label: string }
-  opportunityCount: number
-  top1ConcentrationPct: number
-  concentrationTier: { score: number; max: number; label: string }
+  naturalHealthTier: { score: number; max: number; label: string } | null
+  opportunityCount: number | null
+  top1ConcentrationPct: number | null
+  concentrationTier: { score: number; max: number; label: string } | null
   summaryLines: string[]
   /** 流量层级打标计数 */
   tierBuckets?: TrafficTierBuckets
@@ -107,6 +141,8 @@ export interface BsrTrendPrecompute {
 }
 
 export interface KeywordTrafficEvidence {
+  group?: EvidenceGroup
+  missingReason?: string
   filled: boolean
   summary?: {
     coreCognition: string
@@ -117,7 +153,7 @@ export interface KeywordTrafficEvidence {
     core: number
     organic: number
     ad: number
-    opportunity: number
+    opportunity: number | null
   }
   kwTop: KeywordTrafficTopRow[]
   kwDetail: KeywordTrafficTopRow[]
@@ -151,6 +187,20 @@ export interface TrafficSuggestionBlock {
 }
 
 export interface AsinPriceBsrSnapshot {
+  currency?: string
+  currentPriceDateType?: "provider" | "fetchedAt"
+  trendPriceObservation?: {
+    date: string
+    display: number | null
+    deal: number | null
+    coupon: unknown[] | null
+    couponStatus: "observed" | "unknown"
+  }
+  currentPrice?: number | null
+  currentPriceDate?: string | null
+  currentPriceType?: "product"
+  displayPrice?: number | null
+  displayPriceDate?: string | null
   buyboxPrice: number | null
   bsr: number | null
   bsrTrend: string | null
@@ -161,6 +211,8 @@ export interface AsinPriceBsrSnapshot {
 }
 
 export interface AsinPerformanceEvidence {
+  groups?: Partial<Record<"price" | "orders" | "priceTrend" | "bsr", EvidenceGroup>>
+  ordersLast30Days?: number | null
   filled: boolean
   asin: string
   boughtInPastMonth: number | null
@@ -180,6 +232,9 @@ export interface CompetitorKeywordRow {
 }
 
 export interface CompetitorEvidenceDe {
+  group?: EvidenceGroup
+  targetReference?: EvidenceGroup
+  sharedKeywordScope?: string
   filled: boolean
   missingReason?: string
   competitorAsins?: string[]
@@ -194,11 +249,16 @@ export interface DeEvidenceResult {
   D: KeywordTrafficEvidence
   E: AsinPerformanceEvidence
   meta: {
-    sources: { C?: "mcp"[]; D: "sif"[]; E: "sif"[] }
+    primarySource?: "sif" | "xiyou"
+    sources: {
+      C?: ("mcp" | "sif" | "xiyou")[]
+      D: ("sif" | "xiyou")[]
+      E: ("sif" | "xiyou" | "upload")[]
+    }
     sifDataReady: boolean | null
     sifWarnings: string[]
     fetchedAt: string
-    estimatedPoints: number
+    estimatedPoints?: number
   }
 }
 

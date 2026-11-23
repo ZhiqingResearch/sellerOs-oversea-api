@@ -39,6 +39,12 @@ function setup() {
 }
 
 describe("固定模块积分结算与预检", () => {
+  it("历史优化包含评分合计5积分预检，保留原有个人余额路由", async () => {
+    const f = setup()
+    await expect(f.service.assertFixedModuleAffordable(7, "listing.generate", "optimization")).resolves.toEqual({ credits: 5 })
+    expect(f.credit.assertAffordable).toHaveBeenCalledWith(7, new Decimal(0.5), new Decimal(5))
+    expect(f.credit.consumeCredits).not.toHaveBeenCalled()
+  })
   it.each([1, 2, 5])("类目分析 %s 个，余额预检、实扣和流水数量一致", async quantity => {
     const f = setup()
     const expected = 80 * quantity

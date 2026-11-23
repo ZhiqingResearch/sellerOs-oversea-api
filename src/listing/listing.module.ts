@@ -9,11 +9,14 @@ import { ListingGenerationService } from "./listing-generation.service"
 import { ListingRunService } from "./listing-run.service"
 import { ListingScoreService } from "./listing-score.service"
 import { ListingController } from "./listing.controller"
+import { AutomotiveController, ListingCategoryController } from "./automotive/automotive.controller"
+import { AutomotiveService } from "./automotive/automotive.service"
 
 @Module({
   imports: [UsageModule, HistoryModule],
-  controllers: [ListingController],
+  controllers: [ListingController, AutomotiveController, ListingCategoryController],
   providers: [
+    AutomotiveService,
     ListingAiService,
     ListingScoreService,
     ListingDocumentService,

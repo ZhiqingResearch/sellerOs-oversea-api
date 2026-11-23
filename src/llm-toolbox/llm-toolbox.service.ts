@@ -1,4 +1,5 @@
 import { BadGatewayException, BadRequestException, Injectable, Logger } from "@nestjs/common"
+import { beforeQuotaCharge } from "../common/errors/upstream-quota"
 import { AiGatewayProvider } from "../ai-gateway/ai-gateway.provider"
 import { uiLanguage } from "../common/i18n/request-language"
 import { UsageService } from "../usage/usage.service"
@@ -71,7 +72,7 @@ export class LlmToolboxService {
     const model = await this.billing.resolveModel(LLM_TOOLBOX_CATEGORY)
     await this.usage.assertExactCreditsAffordable(userId, model.fixedCredits)
 
-    const { completion, requestId } = await this.gateway.completeMultimodal({
+    const { completion, requestId } = await beforeQuotaCharge(this.gateway.completeMultimodal({
       model: model.publicId,
       messages: [
         {
@@ -81,7 +82,7 @@ export class LlmToolboxService {
         { role: "user", content: dto.prompt },
       ],
       temperature: 0.7,
-    })
+    }), "operation")
 
     // 中文沿用原文兜底；英文空回复报错，避免把中文输入当作英文结果。
     const text = completionRawText(completion).trim()
@@ -104,14 +105,14 @@ export class LlmToolboxService {
     const model = await this.billing.resolveModel(LLM_TOOLBOX_CATEGORY)
     await this.usage.assertExactCreditsAffordable(userId, model.fixedCredits)
 
-    const { completion, requestId } = await this.gateway.completeMultimodal({
+    const { completion, requestId } = await beforeQuotaCharge(this.gateway.completeMultimodal({
       model: model.publicId,
       messages: [
         { role: "system", content: resolveTranslateSystemPrompt(dto.direction) },
         { role: "user", content: dto.prompt },
       ],
       temperature: 0.1,
-    })
+    }), "operation")
 
     const text = completionRawText(completion).trim()
     if (!text && uiLanguage() === "en-US")
@@ -145,7 +146,7 @@ export class LlmToolboxService {
     await this.usage.assertExactCreditsAffordable(userId, model.fixedCredits)
 
     const dataUrl = `data:${mimetype};base64,${file.buffer.toString("base64")}`
-    const { completion, requestId } = await this.gateway.completeMultimodal({
+    const { completion, requestId } = await beforeQuotaCharge(this.gateway.completeMultimodal({
       model: model.publicId,
       messages: [
         {
@@ -170,7 +171,7 @@ export class LlmToolboxService {
         },
       ],
       temperature: 0.2,
-    })
+    }), "operation")
 
     // 中文保留空串契约；英文空回复在扣费前报错。
     const raw = completionRawText(completion).trim()

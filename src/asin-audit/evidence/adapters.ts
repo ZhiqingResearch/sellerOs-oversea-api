@@ -20,7 +20,7 @@ import type {
 } from "../types/sif.types"
 
 export function sifFmtVol(n: number | null | undefined): string {
-  if (n == null || Number.isNaN(n)) return ""
+  if (n == null || !Number.isFinite(n)) return ""
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`
   if (n >= 1_000) return `${Math.round(n / 1_000)}K`
   return String(n)
@@ -111,16 +111,24 @@ export function adaptKeywordTrafficD(
   const organic = list.filter(k => (k.naturalPositionSeq ?? []).length > 0).length
   const ad = list.filter(k => (k.spPositionSeq ?? []).length > 0 || (k.adScore ?? 0) > 0).length
   // 机会词口径与第⑧维/优化阶段统一（searches>1000 + 自然非首页 + 购买率达标）
-  const opportunity = trafficPrecompute.opportunityCount
+  const opportunity = trafficPrecompute.opportunityCount ?? 0
 
   const headKw = kwTop[0]?.kw ?? "—"
   const headContrib = kwTop[0]?.contribution ?? 0
 
   return {
-    filled: true,
+    filled: list.length > 0,
+    ...(!list.length
+      ? { missingReason: "关键词接口未返回词级数据，不能确认首页命中、机会词承接及词族曝光" }
+      : {}),
     period: { startDate: kwResp.startDate, endDate: kwResp.endDate },
     trafficPrecompute,
-    summary: {
+    summary: !list.length
+      ? {
+          coreCognition: "关键词接口返回空列表，尚无可核验的关键词证据。",
+          trafficStory: "未返回数据不代表真实流量为零，也不能判断机会词已充分承接或流量结构正常。",
+        }
+      : {
       coreCognition:
         uiText(
           `该 ASIN 共反查到 ${kwResp.total ?? list.length} 个流量词，按 Sif 总流量得分排序，`,
@@ -198,7 +206,7 @@ function pickLast<T>(arr: T[] | undefined): T | undefined {
 }
 
 function formatCoupon(couponRaw: number | null | undefined): string {
-  if (couponRaw == null) return uiText("无", "None")
+  if (couponRaw == null || !Number.isFinite(couponRaw)) return uiText("未知", "Unknown")
   return couponRaw < 0 ? `${Math.round(couponRaw * 100)}%` : `$${couponRaw}`
 }
 
@@ -209,9 +217,13 @@ export function adaptAsinPerformanceE(
   priceResp: SifBatchAsinPriceData | null | undefined,
   trendResp: SifAsinOpTrafficTrendData | null | undefined
 ): AsinPerformanceEvidence {
-  const sale: Partial<SifVariantLastSalesRow> = salesResp?.[0] ?? {}
-  const price: Partial<SifBatchAsinPriceData["list"][number]> = priceResp?.list?.[0] ?? {}
+  const sale: Partial<SifVariantLastSalesRow> =
+    salesResp?.find(row => row.asin?.toUpperCase() === asin.toUpperCase()) ?? {}
+  const price: Partial<SifBatchAsinPriceData["list"][number]> =
+    priceResp?.list?.find(row => row.asin?.toUpperCase() === asin.toUpperCase()) ?? {}
   const trend = trendResp ?? {}
+  const finite = (value: number | null | undefined) =>
+    typeof value === "number" && Number.isFinite(value) ? value : null
   const lastIdx = trend.dates?.length ? trend.dates.length - 1 : -1
 
   const pickAt = <T>(arr: T[] | undefined): T | null => {
@@ -234,8 +246,8 @@ export function adaptAsinPerformanceE(
   }
 
   const priceBsr: AsinPriceBsrSnapshot = {
-    buyboxPrice: pickAt(trend.buyboxPrice) ?? price.currentPrice ?? null,
-    bsr: pickAt(trend.bsr),
+    buyboxPrice: finite(pickAt(trend.buyboxPrice)) ?? finite(price.currentPrice),
+    bsr: finite(pickAt(trend.bsr)),
     bsrTrend,
     coupon: formatCoupon(pickAt(trend.couponInfo)),
     listedDate: price.listedDate ?? null,
@@ -246,7 +258,7 @@ export function adaptAsinPerformanceE(
   return {
     filled: true,
     asin,
-    boughtInPastMonth: sale.boughtInPastMonth ?? null,
+    boughtInPastMonth: finite(sale.boughtInPastMonth),
     priceBsr,
     sales: null,
     traffic: null,

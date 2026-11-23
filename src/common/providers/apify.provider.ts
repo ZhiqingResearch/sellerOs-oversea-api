@@ -1,3 +1,4 @@
+import { isQuotaResponse, UpstreamQuotaError } from "../errors/upstream-quota"
 import {
   BadGatewayException,
   Injectable,
@@ -333,6 +334,11 @@ export class ApifyProvider {
         return items
       } catch (error: unknown) {
         const elapsed = ((Date.now() - start) / 1000).toFixed(1)
+        const quotaInfo = this.describeError(error)
+        if (isQuotaResponse({ status: quotaInfo.status, message: quotaInfo.body }) || isQuotaResponse(quotaInfo.message)) {
+          this.logger.warn(`[Apify] 供方额度耗尽 status=${quotaInfo.status ?? "N/A"} actor=${actorId}`)
+          throw new UpstreamQuotaError("apify", amazon ? 502 : 500)
+        }
         if (amazon) {
           // 同步启动断连后不重发；仅记 HTTP 状态，避免响应/异常内的凭证泄漏。
           const status = axios.isAxiosError(error) ? error.response?.status : undefined
@@ -341,13 +347,6 @@ export class ApifyProvider {
         }
         const info = this.describeError(error)
         const retryable = this.isRetryableError(error, info)
-
-        if (this.isBillingError(info)) {
-          this.logger.error(
-            `[Apify] ${actorId} 账号/计费类错误，已隐藏给用户 status=${info.status ?? "N/A"} 耗时=${elapsed}s attempt=${attempt}/${maxAttempts}: ${info.message} ${info.body}`
-          )
-          throw new InternalServerErrorException("服务器内部错误")
-        }
 
         if (!retryable || attempt >= maxAttempts) {
           this.logger.error(
@@ -398,21 +397,6 @@ export class ApifyProvider {
     if (!error.response) return true
     const status = info.status
     return status === 408 || status === 429 || (status != null && status >= 500)
-  }
-
-  private isBillingError(info: ApifyErrorInfo): boolean {
-    if (info.status === 402) return true
-    const text = `${info.message} ${info.body}`.toLowerCase()
-    return [
-      "insufficient",
-      "not enough",
-      "balance",
-      "credit",
-      "billing",
-      "payment",
-      "quota exceeded",
-      "monthly usage",
-    ].some(keyword => text.includes(keyword))
   }
 
   private retryDelayMs(attempt: number, retryAfterMs: number | null): number {

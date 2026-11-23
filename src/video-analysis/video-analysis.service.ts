@@ -1,3 +1,4 @@
+import { streamBeforeQuotaCharge } from "../common/errors/upstream-quota"
 import {
   BadGatewayException,
   HttpException,
@@ -137,7 +138,7 @@ export class VideoAnalysisService {
     let tokenUsage: typeof ZERO_USAGE | null = null
     let rawUsage: unknown = null
     let gatewayAmount: string | undefined
-    for await (const event of this.gateway.streamChat("", userPrompt, {
+    for await (const event of streamBeforeQuotaCharge(this.gateway.streamChat("", userPrompt, {
       model: model.publicId,
       userContent: content,
       temperature: 0.3,
@@ -146,7 +147,7 @@ export class VideoAnalysisService {
       responseFormat: model.supportsJsonMode ? { type: "json_object" } : undefined,
       operationName: "视频分析",
       resolveBilling: true,
-    })) {
+    }), "operation")) {
       if (event.type === "text") {
         if (!sawDelta) {
           sawDelta = true

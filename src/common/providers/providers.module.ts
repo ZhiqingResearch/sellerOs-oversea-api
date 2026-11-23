@@ -11,10 +11,12 @@ import { MailProvider } from "./mail.provider"
 import { StripeProvider } from "./stripe.provider"
 import { SuchuangProvider } from "./suchuang.provider"
 import { TokenlabProvider } from "./tokenlab.provider"
+import { TrohubProvider } from "./trohub.provider"
 import { YingdaoProvider } from "./yingdao.provider"
 import { ZixiaoyunProvider } from "./zixiaoyun.provider"
 
 const providers = [
+  TrohubProvider,
   AllinpayProvider,
   AiGatewayProvider,
   GoogleProvider,

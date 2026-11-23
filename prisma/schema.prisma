@@ -1273,6 +1273,7 @@ model UsageLog {
 
   @@index([userId, createdAt])
   @@index([userId, type])
+  @@index([source, createdAt])
 }
 
 // ==================== 公共扣费 v2 / 对外开放 ====================
@@ -1296,6 +1297,9 @@ model FeatureModule {
 // 对外开放接口的接入方（其他项目服务间调用扣费系统）：AppId + HMAC-SHA256 签名鉴权。
 // 接入方用 scripts/create-open-api-app.ts 创建（secret 只在创建时打印一次）。
 model OpenApiApp {
+  asinAuditCostUserId Int? // ASIN实际用量/成本归属用户；仅记成本，不扣积分
+  isAutomotiveAuditEnabled Boolean @default(false) // 是否允许第三方汽配ASIN审计
+  isComputerAuditEnabled Boolean @default(false) // 是否开通第三方电脑ASIN审计
   isNiuniuOperationPlanEnabled Boolean  @default(false) // 是否允许调用牛牛运营计划（固定专用账号扣费）
   id                           Int      @id @default(autoincrement())
   appId                        String   @unique @db.VarChar(32)
@@ -2233,6 +2237,7 @@ model ProductProfile {
   certifications Json? // string[]
   audience       Json? // { portrait, ageRange, consumptionTier }
   extra          String? @db.Text
+  forbiddenContent String? @db.MediumText
 
   // 三件套来源（前端解析后写回，仅做审计）
   manualPdfUrl String? @db.VarChar(1000)
@@ -3754,4 +3759,216 @@ model ChetaidouResultImport {
 
   @@unique([ownerId, idempotencyKey])
   @@index([ownerId, sourceResultId, action])
+}
+
+model PatentQueryTask {
+  id            Int                @id @default(autoincrement()) @db.UnsignedInt
+  userId        Int
+  requestId     String             @db.VarChar(36)
+  input         Json
+  status        String             @default("RUNNING") @db.VarChar(20)
+  quotedCredits Int
+  annotations   Json               @default("{}")
+  error         String?            @db.VarChar(500)
+  finishedAt    DateTime?
+  createdAt     DateTime           @default(now())
+  deletedAt     DateTime?
+  checks        PatentQueryCheck[]
+
+  @@unique([userId, requestId])
+  @@index([userId, deletedAt, createdAt])
+  @@index([status])
+}
+
+model PatentQueryCheck {
+  id             Int             @id @default(autoincrement()) @db.UnsignedInt
+  taskId         Int             @db.UnsignedInt
+  kind           String          @db.VarChar(10)
+  status         String          @default("PENDING") @db.VarChar(20)
+  upstreamTaskId String?         @db.VarChar(128)
+  output         Json?
+  error          String?         @db.VarChar(500)
+  task           PatentQueryTask @relation(fields: [taskId], references: [id])
+  results        PatentQueryResult[]
+  caches         PatentQueryCache[]
+
+  @@unique([taskId, kind])
+}
+
+model PatentQueryResult {
+  id       Int              @id @default(autoincrement()) @db.UnsignedInt
+  checkId  Int              @db.UnsignedInt
+  imageId  String?          @db.VarChar(64)
+  position Int              @db.UnsignedInt
+  data     Json
+  check    PatentQueryCheck @relation(fields: [checkId], references: [id])
+
+  textMarks PatentQueryTextMark[]
+
+  // 分项内顺序；文字一词一行，imageId 为 null。前端继续使用原有业务标识。
+  @@unique([checkId, position])
+}
+
+model PatentQueryTextMark {
+  id       Int               @id @default(autoincrement()) @db.UnsignedInt
+  resultId Int               @db.UnsignedInt
+  position Int               @db.UnsignedInt
+  data     Json
+  result   PatentQueryResult @relation(fields: [resultId], references: [id], onDelete: Cascade)
+
+  @@unique([resultId, position])
+}
+
+model PatentQueryCache {
+  id        Int              @id @default(autoincrement()) @db.UnsignedInt
+  checkId   Int              @db.UnsignedInt
+  targetId  String           @db.VarChar(191)
+  kind      String           @db.VarChar(10)
+  data      Json
+  fetchedAt DateTime
+  check     PatentQueryCheck @relation(fields: [checkId], references: [id])
+
+  @@unique([checkId, targetId, kind])
+}
+
+model AsinAuditTask {
+  costUserId Int? // 受理时冻结成本归属用户，不随接入方后续修改迁移
+  costSyncedAt DateTime? // 已存账单归集检查点；不触发任何外部取证或生成
+  id Int @id @default(autoincrement()) @db.UnsignedInt // 内部主键
+  taskId String @unique @db.VarChar(64) // 对外任务号
+  appId String @db.VarChar(32) // OpenApiApp.appId
+  auditType String @default("AUTOMOTIVE") @db.VarChar(20) // AUTOMOTIVE/COMPUTER
+  asin String @db.VarChar(10) // 规范化ASIN
+  sku String @db.VarChar(191) // 汽配调用方SKU；电脑任务为空字符串
+  marketplace String @default("US") @db.VarChar(10) // 本期固定美国站
+  status String @default("QUEUED") @db.VarChar(20) // QUEUED/RUNNING/COMPLETED/FAILED
+  stage String @default("WAITING") @db.VarChar(30) // WAITING/CRAWLING/EVIDENCE/TEXT_REVIEW/IMAGE_REVIEW/SCORING/OPTIMIZING/FINISHED
+  score Float? // 完成得分
+  grade String? @db.VarChar(1) // S/A/B/C/D
+  coverageRate Float? // 0到1的证据预算覆盖率
+  listingScore Float? // 电脑Listing百分制分数
+  trafficScore Float? // 电脑关键词与流量百分制分数
+  error Json? // 结构化错误，禁止保存认证秘密
+  completedAt DateTime? // 成功或失败终态时间
+  createdAt DateTime @default(now()) // 受理时间
+  updatedAt DateTime @updatedAt // 状态更新时间
+  payload AsinAuditTaskPayload? // 冷数据
+  snapshots AsinAuditCrawlSnapshot[] // 请求与响应快照
+  optimization AsinAuditOptimization? // 原审计任务唯一优化执行记录
+  costRecords AsinAuditCostRecord[] // 实际账单与金额未知的调用分开保存
+
+  @@index([appId, createdAt])
+  @@index([status, id])
+  @@index([costUserId, createdAt])
+}
+
+model AsinAuditCostRecord {
+  id Int @id @default(autoincrement()) @db.UnsignedInt // 内部主键
+  recordKey String @unique @db.VarChar(64) // 持久化请求身份哈希，重复同步幂等
+  taskId Int @db.UnsignedInt // 原审计任务内部ID
+  userId Int // 成本归属用户，与原任务冻结值一致
+  provider String @db.VarChar(32) // AI_GATEWAY/CRAWLER/SIF/SELLERSPRITE等真实来源
+  sourceId String @db.VarChar(100) // 阶段名、快照号或优化执行号
+  model String? @db.VarChar(100) // 实际账单模型，缺失时保留任务模型
+  costCny Decimal? @db.Decimal(18, 6) // 上游实际人民币金额，未知为null；不乘倍率
+  costStatus String @db.VarChar(20) // KNOWN/UNKNOWN/DUPLICATE；重复账单引用原记录，真实零金额为KNOWN
+  state String @db.VarChar(32) // 原请求/阶段状态，不等同计费状态
+  usage Json // token、配额、HTTP/业务码和缺失原因；不保存密钥或完整商品正文
+  occurredAt DateTime // 原请求或任务发生时间，非补录时间
+  createdAt DateTime @default(now()) // 首次归集时间
+  updatedAt DateTime @updatedAt // 归集更新时间
+  task AsinAuditTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([userId, occurredAt])
+  @@index([taskId, provider])
+}
+
+model AsinAuditOptimization {
+  id Int @id @default(autoincrement()) @db.UnsignedInt // 内部主键
+  optimizationId String @unique @db.VarChar(64) // 对外优化执行号
+  taskId Int @unique @db.UnsignedInt // 原审计任务；唯一键保证跨进程幂等
+  status String @default("QUEUED") @db.VarChar(20) // QUEUED/RUNNING/RECEIVED/COMPLETED/FAILED/UNKNOWN
+  model String @db.VarChar(100) // 原审计模型快照
+  error Json? // 脱敏错误；UNKNOWN不得自动重发
+  startedAt DateTime? // 开始调用时间
+  completedAt DateTime? // 生成终态时间
+  createdAt DateTime @default(now()) // 受理时间
+  updatedAt DateTime @updatedAt // 状态更新时间
+  task AsinAuditTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  payload AsinAuditOptimizationPayload? // 生成输入与成品冷数据
+
+  @@index([status, id])
+}
+
+model AsinAuditOptimizationPayload {
+  id Int @id @default(autoincrement()) @db.UnsignedInt // 内部主键
+  optimizationId Int @unique @db.UnsignedInt // 优化执行内部ID
+  context Json // 原审计证据、评分及正确配置的不可变快照
+  request Json // 服务端提示词及规则版本；不对外返回
+  rawResponse String? @db.LongText // 模型原文；先保存再解析，失败不丢失
+  result Json? // 完整AuditOptimizeResult交付物
+  usage Json? // 实际模型用量与账单记录，不计第三方积分
+  createdAt DateTime @default(now()) // 创建时间
+  updatedAt DateTime @updatedAt // 修改时间
+  optimization AsinAuditOptimization @relation(fields: [optimizationId], references: [id], onDelete: Cascade)
+}
+
+model AsinAuditTaskPayload {
+  id Int @id @default(autoincrement()) @db.UnsignedInt // 内部主键
+  taskId Int @unique @db.UnsignedInt // 任务内部ID
+  input Json // 原始规范化API入参
+  config Json // 模型、规则版本和注册品牌基准快照
+  normalizedInput Json? // 爬虫目标选择及对比资料标准化快照
+  phases Json @default("{}") // 逐阶段请求、状态、响应、用量及哈希
+  result Json? // 对外完整结果
+  auditDetail Json? // 原始40项规则计算及证据
+  createdAt DateTime @default(now()) // 创建时间
+  updatedAt DateTime @updatedAt // 修改时间
+  task AsinAuditTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+}
+
+model AsinAuditCrawlSnapshot {
+  id Int @id @default(autoincrement()) @db.UnsignedInt // 内部主键
+  snapshotId String @unique @db.VarChar(64) // 对外快照号
+  taskId Int @db.UnsignedInt // 所属任务
+  request Json // 请求方法、URL及业务参数，无认证头
+  provider String @default("CRAWLER") @db.VarChar(20) // CRAWLER/SIF/MCP
+  requestKey String @default("") @db.VarChar(64) // 任务内请求哈希，恢复时匹配快照
+  state String @default("SUBMITTING") @db.VarChar(20) // SUBMITTING/RECEIVED/FAILED/UNKNOWN
+  httpStatus Int? // 上游HTTP状态
+  rawResponse String? @db.LongText // 原始响应体；含非JSON错误响应
+  responseHash String? @db.VarChar(64) // 原始响应SHA256
+  productPointer String? @db.VarChar(100) // 目标在原始JSON中的位置
+  durationMs Int? // 请求耗时毫秒
+  error Json? // 脱敏错误
+  fetchedAt DateTime? // 收完响应时间
+  createdAt DateTime @default(now()) // 请求准备时间
+  updatedAt DateTime @updatedAt // 状态更新时间
+  task AsinAuditTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, id])
+  @@index([taskId, requestKey])
+}
+
+model GenerationRecord {
+  id               BigInt    @id @default(autoincrement())
+  userId           Int
+  function         String    @db.VarChar(40)
+  sourceType       String    @db.VarChar(64)
+  sourceId         String    @db.VarChar(191)
+  operation        String    @default("") @db.VarChar(32)
+  prompt           String    @db.LongText
+  modelPublicId    String?   @db.VarChar(191)
+  modelDisplayName String?   @db.VarChar(255)
+  credits          Decimal?  @db.Decimal(18, 4)
+  resultUrl        String?   @db.Text
+  resultCount      Int?
+  deletedAt        DateTime?
+  occurredAt       DateTime
+  updatedAt        DateTime  @updatedAt
+
+  @@unique([sourceType, sourceId, operation])
+  @@index([occurredAt, id])
+  @@index([function, occurredAt, id])
+  @@index([userId, occurredAt, id])
 }

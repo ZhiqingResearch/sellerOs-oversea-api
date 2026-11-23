@@ -1,3 +1,4 @@
+import { isUpstreamQuotaError, quotaFailure } from "../common/errors/upstream-quota"
 import { BadGatewayException, BadRequestException, Injectable, Logger } from "@nestjs/common"
 import { ConfigService } from "@nestjs/config"
 import { AuditProduct, Prisma } from "@prisma/client"
@@ -78,6 +79,7 @@ export class AuditService {
         : ["crawler", "apify"]
     let raw: RawAuditData | undefined
     let source: "crawler" | "apify" = "crawler"
+    let quotaError: unknown
     let errorCode = "AUDIT_FETCH_FAILED"
     for (const candidate of sources) {
       const start = Date.now()
@@ -96,6 +98,7 @@ export class AuditService {
         )
         break
       } catch (e) {
+        if (isUpstreamQuotaError(e)) quotaError = e
         errorCode =
           e instanceof CrawlerError && /^[A-Z0-9_]{1,64}$/i.test(e.code) ? e.code : "UPSTREAM_ERROR"
         this.logger.warn(
@@ -103,6 +106,7 @@ export class AuditService {
         )
       }
     }
+    if (!raw && quotaError) throw quotaFailure(quotaError, "not_charged")
     if (!raw)
       throw new BadGatewayException({
         code: target ? "AUDIT_FETCH_FAILED" : errorCode,

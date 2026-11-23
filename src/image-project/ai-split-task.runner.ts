@@ -1,3 +1,5 @@
+import { appendForbiddenContent } from "../common/utils/forbidden-content"
+import { quotaFailure, quotaTaskMessage } from "../common/errors/upstream-quota"
 import { BadRequestException, Injectable, Logger, OnModuleInit } from "@nestjs/common"
 import { Interval } from "@nestjs/schedule"
 import { InvokeType, Prisma } from "@prisma/client"
@@ -381,7 +383,7 @@ export class AiSplitTaskRunner implements OnModuleInit {
             role: "system",
             content: this.structuredSystemPrompt(
               snapshot,
-              this.competitorPrompt,
+              appendForbiddenContent(this.competitorPrompt, snapshot.generationSettings.forbiddenContent),
               COMPETITOR_SCHEMA
             ),
           },
@@ -452,11 +454,11 @@ export class AiSplitTaskRunner implements OnModuleInit {
         `完成｜耗时 ${((Date.now() - startedAt) / 1000).toFixed(1)}s，模板已存入任务快照，等待计费后进入生图规划`
       )
     } catch (error) {
-      errorMessage = this.errorMessage(error)
+      errorMessage = quotaTaskMessage(error, requestId ? "unknown" : "not_charged", this.errorMessage(error), "step")
       this.logger.warn(
         `[AI 拆图] 竞品拆解失败 task=${taskId} requestId=${requestId ?? "无"}: ${errorMessage}`
       )
-      if (!requestId) throw error
+      if (!requestId) throw quotaFailure(error, "not_charged", "step")
     }
 
     snapshot.gatewayCalls.workflow1RequestId = requestId
@@ -567,7 +569,7 @@ export class AiSplitTaskRunner implements OnModuleInit {
             role: "system",
             content: this.structuredSystemPrompt(
               snapshot,
-              this.productPrompt,
+              appendForbiddenContent(this.productPrompt, snapshot.generationSettings.forbiddenContent),
               GENERATION_PLAN_SCHEMA
             ),
           },
@@ -616,6 +618,7 @@ export class AiSplitTaskRunner implements OnModuleInit {
       // 交给提交阶段的 sanitizeNegativePrompt 统一剔除，避免误杀任务。
       const negativeViolations = this.creativeElementNames(snapshot.competitorTemplate).filter(
         name =>
+          !this.mentionsElement(snapshot.generationSettings.forbiddenContent ?? "", name) &&
           planNegativeText
             .split(/[,，;；]/)
             .filter(clause => clause.trim())
@@ -645,11 +648,11 @@ export class AiSplitTaskRunner implements OnModuleInit {
         `完成｜耗时 ${((Date.now() - startedAt) / 1000).toFixed(1)}s，生图指令已存入任务快照，等待计费后提交生图`
       )
     } catch (error) {
-      errorMessage = this.errorMessage(error)
+      errorMessage = quotaTaskMessage(error, requestId ? "unknown" : "not_charged", this.errorMessage(error), "step")
       this.logger.warn(
         `[AI 拆图] 生图规划失败 task=${taskId} requestId=${requestId ?? "无"}: ${errorMessage}`
       )
-      if (!requestId) throw error
+      if (!requestId) throw quotaFailure(error, "not_charged", "step")
     }
 
     snapshot.gatewayCalls.workflow2RequestId = requestId
@@ -827,6 +830,9 @@ export class AiSplitTaskRunner implements OnModuleInit {
       request.prompt = prompt
     }
 
+    prompt = appendForbiddenContent(prompt, snapshot.generationSettings.forbiddenContent)
+    request.prompt = prompt
+
     this.stepLog(
       task.id,
       "第3步·提交生图",
@@ -856,10 +862,11 @@ export class AiSplitTaskRunner implements OnModuleInit {
       "第3步·提交生图",
       `输入｜完整请求（Gateway 实际收到的内容）：${JSON.stringify(request)}`
     )
+    // 此阶段也可由启动恢复重入，之前的图片提交是否已受理未知，不能承诺图片未扣费。
     const remoteTask = await this.gateway.createImageTask(
       request as unknown as ImageTaskRequest,
       `ai-split:image-generation-task:${task.id}`
-    )
+    ).catch(error => { throw quotaFailure(error, "unknown", "item") })
     const linked = await this.prisma.$transaction(
       async tx => {
         const updated = await tx.generationTask.updateMany({

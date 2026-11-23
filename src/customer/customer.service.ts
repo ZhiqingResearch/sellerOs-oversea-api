@@ -1,3 +1,4 @@
+import { beforeQuotaCharge, isUpstreamQuotaError, quotaTaskMessage } from "../common/errors/upstream-quota"
 import sharp from "sharp"
 import { modelDisplayNames, jsonObject, videoMetadata } from "../common/utils/generation-metadata"
 import {
@@ -438,10 +439,10 @@ export class CustomerService implements OnModuleInit {
 
   /** 调用 Gemini 生成运营方案并回写 */
   private async generateStrategy(customerId: number, customer: CustomerInfo) {
-    const strategy = await this.google.generateText(
+    const strategy = await beforeQuotaCharge(this.google.generateText(
       CUSTOMER_STRATEGY_SYSTEM_PROMPT,
       buildCustomerStrategyPrompt(customer)
-    )
+    ), "step")
 
     if (strategy) {
       await this.prisma.customer.update({
@@ -598,10 +599,10 @@ export class CustomerService implements OnModuleInit {
     customer: CustomerInfo,
     account: AccountInfo
   ) {
-    const strategy = await this.google.generateText(
+    const strategy = await beforeQuotaCharge(this.google.generateText(
       ACCOUNT_STRATEGY_SYSTEM_PROMPT,
       buildAccountStrategyPrompt(customer, account)
-    )
+    ), "step")
 
     if (strategy) {
       await this.prisma.account.update({
@@ -627,12 +628,12 @@ export class CustomerService implements OnModuleInit {
   async createAvatar(customerId: number, dto: CreateAvatarDto, userId: number) {
     await this.findOne(customerId, userId)
 
-    const figureId = await this.baiduXiling.createAvatar({
+    const figureId = await beforeQuotaCharge(this.baiduXiling.createAvatar({
       fileId: dto.fileId,
       name: dto.name,
       gender: dto.gender,
       callbackUrl: `${this.config.get<string>("API_BASE_URL")}/api/customer/webhook/avatar`,
-    })
+    }), "step")
 
     const { fileId: _fileId, ...rest } = dto
     return await this.prisma.avatar.create({
@@ -708,7 +709,7 @@ export class CustomerService implements OnModuleInit {
       responseType: "arraybuffer",
     })
 
-    const perId = await this.baiduXiling.createVoiceClone({
+    const perId = await beforeQuotaCharge(this.baiduXiling.createVoiceClone({
       audioBuffer: Buffer.from(audioBuffer),
       audioFileName: dto.trainingUrl.split("/").pop() ?? "audio.wav",
       name: dto.name,
@@ -716,7 +717,7 @@ export class CustomerService implements OnModuleInit {
       exampleText: dto.exampleText,
       describe: dto.description,
       callbackUrl: `${this.config.get<string>("API_BASE_URL")}/api/customer/webhook/voice`,
-    })
+    }), "step")
 
     return await this.prisma.voice.create({
       data: { ...dto, perId, customerId },
@@ -1363,7 +1364,7 @@ export class CustomerService implements OnModuleInit {
     }
 
     try {
-      const result = await this.google.deepSearch(query)
+      const result = await beforeQuotaCharge(this.google.deepSearch(query), "step")
       if (!result) {
         await writeIfCurrent({ status: "FAILED", errorMessage: "Deep Research 未返回结果" })
         this.logger.error(`${tag} 失败: Deep Research 未返回结果`)
@@ -1402,7 +1403,7 @@ export class CustomerService implements OnModuleInit {
       avoidTopics: project.customer.avoidTopics ?? "",
     })
 
-    const raw = await this.google.generateTextWithSearch(HOTSPOTS_SYSTEM_PROMPT, userPrompt)
+    const raw = await beforeQuotaCharge(this.google.generateTextWithSearch(HOTSPOTS_SYSTEM_PROMPT, userPrompt), "step")
     if (!raw) throw new NotFoundException("热点搜索未返回结果，请稍后重试")
 
     const start = raw.indexOf("{")
@@ -1495,7 +1496,7 @@ export class CustomerService implements OnModuleInit {
       throw new NotFoundException("该项目下没有来源素材，无法生成方案")
     }
 
-    const result = await this.google.generateText(
+    const result = await beforeQuotaCharge(this.google.generateText(
       CONTENT_PLAN_SYSTEM_PROMPT,
       buildContentPlanPrompt(
         project.customer,
@@ -1503,7 +1504,7 @@ export class CustomerService implements OnModuleInit {
         [{ type: project.source.type, content: project.source.content }],
         { integrationType, targetDurationSec }
       )
-    )
+    ), "step")
 
     if (!result) throw new NotFoundException("AI 生成方案失败，请稍后重试")
     return { content: result }
@@ -1541,7 +1542,7 @@ export class CustomerService implements OnModuleInit {
     }
 
     const plan = this.parseContentPlan(strategy.content)
-    const result = await this.google.generateText(
+    const result = await beforeQuotaCharge(this.google.generateText(
       SCRIPT_SYSTEM_PROMPT,
       buildScriptPrompt(
         strategy.project.customer,
@@ -1549,7 +1550,7 @@ export class CustomerService implements OnModuleInit {
         plan,
         strategy.targetDurationSec
       )
-    )
+    ), "step")
     if (!result) throw new NotFoundException("AI 生成口播稿失败，请稍后重试")
 
     const script =
@@ -1593,10 +1594,10 @@ export class CustomerService implements OnModuleInit {
     }
 
     const plan = this.parseContentPlan(strategy.content)
-    const result = await this.google.generateText(
+    const result = await beforeQuotaCharge(this.google.generateText(
       COPYWRITING_SYSTEM_PROMPT,
       buildCopyWritingPrompt(strategy.project.customer, strategy.project.account, plan)
-    )
+    ), "step")
     if (!result) throw new NotFoundException("AI 生成发布文案失败，请稍后重试")
 
     const parsed = this.parseJsonBlock<{ title: string; body: string; tags: string[] }>(result)
@@ -1651,10 +1652,10 @@ export class CustomerService implements OnModuleInit {
       const plan = this.parseContentPlan(strategy.content)
       const shotCount = CustomerService.STORYBOARD_DEFAULT_COUNT
 
-      const result = await this.google.generateText(
+      const result = await beforeQuotaCharge(this.google.generateText(
         STORYBOARD_SYSTEM_PROMPT,
         buildStoryboardPrompt(strategy.project.customer, plan, shotCount)
-      )
+      ), "step")
       if (!result) throw new NotFoundException("AI 生成分镜头失败，请稍后重试")
 
       const items = this.parseJsonBlock<StoryboardItem[]>(result).slice(0, shotCount)
@@ -1924,12 +1925,12 @@ export class CustomerService implements OnModuleInit {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       this.logger.error(`[分镜视频] Gateway 提交失败 video=${videoId}: ${message}`)
-      // 仅网关明确拒绝（400/404 参数不合法/模型下架）才终态化；
-      // 429/401/403/5xx/超时视为瞬态或结果不确定，保留 GENERATING 等启动恢复按幂等键重提
-      if (!(error instanceof BadRequestException)) return
+      // 仅网关明确拒绝（参数不合法/模型下架/明确额度耗尽）才终态化；
+      // 普通 429/401/403/5xx/超时视为瞬态或结果不确定，保留 GENERATING 等启动恢复按幂等键重提
+      if (!(error instanceof BadRequestException) && !isUpstreamQuotaError(error)) return
       await this.prisma.storyboardVideo.updateMany({
         where: { id: videoId, status: "GENERATING", deletedAt: null },
-        data: { status: "FAILED", errorMessage: "AI Gateway 分镜视频任务提交失败" },
+        data: { status: "FAILED", errorMessage: quotaTaskMessage(error, "not_charged", "AI Gateway 分镜视频任务提交失败", "item") },
       })
       return
     }
@@ -2060,10 +2061,10 @@ export class CustomerService implements OnModuleInit {
       const plan = this.parseContentPlan(strategy.content)
       const count = CustomerService.MATERIAL_DEFAULT_COUNT
 
-      const result = await this.google.generateText(
+      const result = await beforeQuotaCharge(this.google.generateText(
         MATERIAL_SYSTEM_PROMPT,
         buildMaterialPrompt(strategy.project.customer, strategy.project.account, plan, count)
-      )
+      ), "step")
       if (!result) throw new NotFoundException("AI 生成素材图片失败，请稍后重试")
 
       const items = this.parseJsonBlock<MaterialItem[]>(result).slice(0, count)
@@ -2279,10 +2280,10 @@ export class CustomerService implements OnModuleInit {
 
     const job = async () => {
       this.logger.log(`${tag} 步骤 1/2 调用 Nano Banana 生成图片`)
-      const image = await this.google.generateImage(params.prompt, {
+      const image = await beforeQuotaCharge(this.google.generateImage(params.prompt, {
         aspectRatio: params.aspectRatio,
         refImageUrls: params.refImageUrls,
-      })
+      }), "step")
       if (!image) {
         await markFailed("Nano Banana 生成失败")
         return
@@ -2379,7 +2380,7 @@ export class CustomerService implements OnModuleInit {
     // 视频分辨率沿用数字人底板原始分辨率（曦灵要求不能超过底板宽高）
     const avatarInfo = await this.baiduXiling.queryAvatar(avatar.figureId, avatarQueryOptions)
 
-    const taskId = await this.baiduXiling.createVideoTask({
+    const taskId = await beforeQuotaCharge(this.baiduXiling.createVideoTask({
       figureId: avatar.figureId,
       perId: voice.perId,
       text: content,
@@ -2389,7 +2390,7 @@ export class CustomerService implements OnModuleInit {
       speed,
       volume,
       pitch,
-    })
+    }), "step")
 
     return await this.prisma.script.create({
       data: {

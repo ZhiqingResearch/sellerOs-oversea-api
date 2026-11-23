@@ -148,13 +148,14 @@ export function normalizeAuditEvidence(
     D: de.D,
     E: de.E,
     meta: {
+      ...de.meta,
       sources: {
         ...(A.filled ? { A: [mergedAbpc.A ? productSource("A") : ("paste" as const)] } : {}),
         ...(P.filled ? { P: [productSource("P")] } : {}),
         ...(B.filled ? { B: [productSource("B")] } : {}),
-        ...(C.filled ? { C: ["erp" as const] } : {}),
+        ...(C.filled ? { C: (abpc?.C?.filled ? ["erp" as const] : de.meta.sources.C) ?? ["erp" as const] } : {}),
         D: de.meta.sources.D,
-        E: de.E.adCleaning ? ["sif" as const, "upload" as const] : de.meta.sources.E,
+        E: de.E.adCleaning ? [...new Set([...(de.meta.sources.E ?? []), "upload" as const])] : de.meta.sources.E,
       },
       sifDataReady: de.meta.sifDataReady,
       sifWarnings: de.meta.sifWarnings,

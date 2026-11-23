@@ -46,6 +46,7 @@ export interface AiSplitProductImageSnapshot {
 }
 
 export interface AiSplitGenerationSettings {
+  forbiddenContent?: string
   site: AiSplitSite
   /** 商品资料本地化取值 locale（国家码动态推导，查不到回落 en-US） */
   locale: string

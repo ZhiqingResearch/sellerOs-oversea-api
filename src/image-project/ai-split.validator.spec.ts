@@ -424,6 +424,7 @@ describe("AiSplitValidator", () => {
         status: "ACTIVE",
         productProfile: {
           productName: "户外电动车",
+          forbiddenContent: "  - 禁止中文清单\n",
           sku: "SK1",
           brandName: "BrandX",
           categoryL1: "户外",
@@ -473,6 +474,9 @@ describe("AiSplitValidator", () => {
     it("旧枚举外的新站点（TIKTOK_MX）零改动生效：locale/language 按国家码推导，资料取对应本地化", async () => {
       const { validator, call } = projectSetup("TIKTOK_MX")
       const snapshot = await call()
+      expect(snapshot.forbiddenContent).toBe("  - 禁止中文清单\n")
+      expect(snapshot.currentProduct).not.toHaveProperty("forbiddenContent")
+      expect(snapshot.currentProductKeys).not.toContain("forbiddenContent")
       expect(snapshot.locale).toBe("es-MX")
       expect(snapshot.language).toBe("Spanish (es-MX)")
       expect((snapshot.currentProduct as { productName?: string }).productName).toBe(

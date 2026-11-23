@@ -20,6 +20,7 @@ import {
   AddMemberDto,
   BatchQuotaDto,
   BatchSaveModelsDto,
+  QueryMembersDto,
   QueryUsageDto,
   UpdateMemberQuotaDto,
   UpdateMemberRoleDto,
@@ -86,10 +87,10 @@ export class TeamConsoleController {
   // ==================== 成员管理 ====================
 
   @Get("members")
-  @ApiOperation({ summary: "成员列表（角色/状态/本月已用/个人上限/剩余）" })
-  async members(@Request() req: { user: { id: number } }) {
+  @ApiOperation({ summary: "成员列表（支持姓名/账号、角色、状态、额度、本月用量筛选）" })
+  async members(@Request() req: { user: { id: number } }, @Query() query: QueryMembersDto) {
     const ctx = await this.readCtx(req)
-    return this.team.listMembers(ctx.team.id)
+    return this.team.listMembers(ctx.team.id, query)
   }
 
   @Post("members")

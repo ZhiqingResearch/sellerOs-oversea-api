@@ -12,6 +12,7 @@ import {
   LISTING_HISTORY_TITLE_PREFIX,
   LISTING_STEP_LABELS,
 } from "./listing-history-title"
+import { recordGenerationSuccess } from "../generation-record/generation-record-success"
 
 const LISTING_TRANSACTION_MAX_WAIT_MS = 10_000
 const LISTING_TRANSACTION_TIMEOUT_MS = 60_000
@@ -64,9 +65,10 @@ export class ListingRunService {
     userId: number,
     runId: string,
     dto: UpdateListingRunDto,
-    persistGeneration?: (tx: Prisma.TransactionClient) => Promise<void>
+    persistGeneration?: (tx: Prisma.TransactionClient) => Promise<void>,
+    resolveReport?: (current: Prisma.JsonObject) => Record<string, unknown>
   ) {
-    return this.prisma.$transaction(
+    const result = await this.prisma.$transaction(
       async tx => {
         // 先锁公共报告，再锁任务，与通用编辑及另一方案保存按相同顺序串行。
         const run = await tx.listingRun.findFirst({
@@ -123,14 +125,37 @@ export class ListingRunService {
               dto.status === "RUNNING" ? Date.now() : (previousAttempt?.startedAt ?? Date.now()),
           }
         }
-        let report = dto.data as Prisma.InputJsonValue | undefined
+        const reportData = resolveReport
+          ? resolveReport(current.data as Prisma.JsonObject)
+          : dto.data
+        let report = reportData as Prisma.InputJsonValue | undefined
         if (report && dto.planIndex !== undefined) {
           const previous =
             current.data && typeof current.data === "object" && !Array.isArray(current.data)
               ? current.data
               : {}
-          const incoming = dto.data!
-          const plans = Array.isArray(previous.plans) ? [...previous.plans] : []
+          const incoming = reportData!
+          const previousPlans = Array.isArray(previous.plans)
+            ? previous.plans
+            : previous.result
+              ? [
+                  {
+                    result: previous.result,
+                    scoreResult: previous.scoreResult,
+                    score: previous.score,
+                  },
+                ]
+              : []
+          const plans: Prisma.JsonArray = []
+          for (const [index, plan] of previousPlans.entries()) {
+            const explicitIndex =
+              plan && typeof plan === "object" && !Array.isArray(plan)
+                ? (plan as Prisma.JsonObject).planIndex
+                : undefined
+            const targetIndex = explicitIndex === 0 || explicitIndex === 1 ? explicitIndex : index
+            while (plans.length <= targetIndex) plans.push(null)
+            plans[targetIndex] = plan
+          }
           while (plans.length <= dto.planIndex) plans.push(null)
           const incomingPlan = (incoming.plans as Prisma.JsonArray)?.[0]
           plans[dto.planIndex] =
@@ -185,6 +210,8 @@ export class ListingRunService {
         timeout: LISTING_TRANSACTION_TIMEOUT_MS,
       }
     )
+    if (dto.status === "COMPLETED") await recordGenerationSuccess(this.prisma, "history", result.id)
+    return result
   }
 
   async beginStep(userId: number, dto: ListingAiInvocationDto) {

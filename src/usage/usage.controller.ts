@@ -17,6 +17,11 @@ import { PermissionsGuard } from "../auth/guards/permissions.guard"
 import { ChargeMcpDto } from "./dto/charge-mcp.dto"
 import { ChargeTokensDto } from "./dto/charge-tokens.dto"
 import {
+  GenerationRecordDetailDto,
+  QueryGenerationRecordDetailDto,
+} from "./dto/generation-record-detail.dto"
+import {
+  GenerationRecordFunctionOptionDto,
   GenerationRecordModelOptionDto,
   QueryGenerationRecordModelOptionsDto,
   QueryGenerationRecordsDto,
@@ -26,6 +31,7 @@ import { QueryUsageStatsDto } from "./dto/query-usage-stats.dto"
 import { UsageDeductV2Dto } from "./dto/usage-deduct-v2.dto"
 import { UsageDeductDto } from "./dto/usage-deduct.dto"
 import { GenerationRecordService } from "./generation-record.service"
+import { GenerationRecordDetailService } from "./generation-record-detail.service"
 import { UsageService } from "./usage.service"
 
 @ApiTags("用量与额度")
@@ -35,7 +41,8 @@ import { UsageService } from "./usage.service"
 export class UsageController {
   constructor(
     private readonly usageService: UsageService,
-    private readonly generationRecordService: GenerationRecordService
+    private readonly generationRecordService: GenerationRecordService,
+    private readonly generationRecordDetailService: GenerationRecordDetailService
   ) {}
 
   @Post("fixed-module/precheck")
@@ -66,16 +73,40 @@ export class UsageController {
     return this.usageService.listLogs(req.user.id, query)
   }
 
+  @Get("generation-records/function-options")
+  @RequirePermissions("company.admin")
+  @ApiOperation({
+    summary: "用户生成记录功能筛选选项（管理员）",
+    description:
+      "含全部功能、图片、视频、灵感雷达及 11 类文本功能；ASIN 审计打分和优化统一归为 ASIN_AUDIT。全部功能查询时省略 function 或传空串。",
+  })
+  @ApiOkResponse({ type: GenerationRecordFunctionOptionDto, isArray: true })
+  getGenerationRecordFunctionOptions() {
+    return this.generationRecordService.getFunctionOptions()
+  }
+
   @Get("generation-records/model-options")
   @RequirePermissions("company.admin")
   @ApiOperation({
     summary: "用户生成记录模型筛选选项（管理员）",
     description:
-      "按 keyword / orgId / roleId / function / dateFrom / dateTo 对完整记录集筛选后返回去重模型；不受列表分页和当前 model 影响。前端自行追加「全部模型」。",
+      "支持全部历史，dateFrom/dateTo 可选。按 keyword / orgId / roleId / function / dateFrom / dateTo 筛选后返回去重模型；不受列表分页和当前 model 影响。前端自行追加「全部模型」。",
   })
   @ApiOkResponse({ type: GenerationRecordModelOptionDto, isArray: true })
   getGenerationRecordModelOptions(@Query() query: QueryGenerationRecordModelOptionsDto) {
     return this.generationRecordService.getModelOptions(query)
+  }
+
+  @Get("generation-records/detail")
+  @RequirePermissions("company.admin")
+  @ApiOperation({
+    summary: "查询文本生成记录正文（管理员）",
+    description:
+      "原样传列表 key，支持所有已接入文本功能。只读已保存的业务正文，不调用模型或扣费；JSON/纯文本由 format 区分。记录存在但已删除、无正文或仅有扣费流水时返回 available=false；标识非法400，记录不存在404。",
+  })
+  @ApiOkResponse({ type: GenerationRecordDetailDto })
+  getGenerationRecordDetail(@Query() query: QueryGenerationRecordDetailDto) {
+    return this.generationRecordDetailService.detail(query.key)
   }
 
   @Get("generation-records")
@@ -83,7 +114,7 @@ export class UsageController {
   @ApiOperation({
     summary: "用户生成记录（管理员）",
     description:
-      "跨用户列出图片 / 视频创作 / 影刀 RPA / 灵感雷达记录（合并 GenerationTask + ImageGenJob + VideoTask + RpaCreationTask + InspirationSubscription 最近刷新），含用户、组织、角色、提示词、模型、扣除积分、时间、结果。RPA 图片归入 IMAGE、RPA 视频归入 VIDEO；AI 拆图按任务组（groupId）聚合为一行并入 IMAGE，积分含工作流阶段 + 终态生图全部流水；通用生图 t2i/i2i（ImageGenJob）按 jobId 一行并入 IMAGE，积分按 UsageLog.meta.jobId 反查。支持 keyword(姓名/手机号/提示词/订阅名) / orgId / roleId / function(IMAGE|VIDEO|INSPIRATION_RADAR) / model / dateFrom / dateTo 筛选 + 分页，并返回筛选集累计实扣积分。",
+      "支持全部历史，dateFrom/dateTo 可选。跨用户合并图片、视频、RPA、灵感雷达和 11 类文本功能记录。function 取 function-options.value，省略则查全部；列表、总数、累计实扣积分、模型选项使用相同功能范围。文本行 contentType=TEXT，function 为具体功能；ASIN_AUDIT 统一包含打分和优化。models 为一份报告关联的全部模型，model 为当前筛选模型或代表模型。只按明确请求/流水标识关联费用；legacy 模式下历史孤立扣费保留 BILLED 行并注明暂无关联报告，credits=null 表示无法确定积分。已软删除结果保留审计记录但隐藏结果链接。支持 keyword / orgId / roleId / model / dateFrom / dateTo 与分页。",
   })
   listGenerationRecords(@Query() query: QueryGenerationRecordsDto) {
     return this.generationRecordService.list(query)

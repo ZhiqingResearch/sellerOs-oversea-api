@@ -17,6 +17,7 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateIf,
   ValidateNested,
 } from "class-validator"
 import { PaginationDto } from "../common/dto/pagination.dto"
@@ -304,6 +305,12 @@ class ProductProfileLocalizationDto {
 }
 
 export class UpsertProductProfileDto {
+  @ApiPropertyOptional({ description: "禁用词与内容，空串清空，未传保留原值", maxLength: 20000 })
+  @ValidateIf((_, value) => value !== undefined)
+  @IsString({ message: "禁用词与内容必须是字符串" })
+  @MaxLength(20000, { message: "禁用词与内容不能超过 20000 个字符" })
+  forbiddenContent?: string
+
   @ApiPropertyOptional({ description: "产品名" })
   @IsOptional()
   @IsString()

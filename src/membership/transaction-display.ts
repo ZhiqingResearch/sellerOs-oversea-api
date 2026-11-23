@@ -126,6 +126,23 @@ export function describeTransaction(txn: TxnLike): TxnDescription {
       return { category: "注册赠送", title, amountCny: null, status }
     }
     case CreditTxnType.MANUAL_ADJUST:
+      if (meta.adminAdjustment === true) {
+        const typeLabel =
+          txn.bucket === CreditBucket.RECHARGE
+            ? "充值积分"
+            : txn.bucket === CreditBucket.PACKAGE
+              ? "套餐积分"
+              : txn.bucket === CreditBucket.GIFT
+                ? "赠送积分"
+                : "积分"
+        const deduct = txn.direction === CreditDirection.DEBIT
+        return {
+          category: deduct ? "手动调整" : "赠送",
+          title: `${txn.teamId != null ? "企业" : "后台"}${typeLabel}${deduct ? "扣减" : "发放"}`,
+          amountCny: null,
+          status,
+        }
+      }
       // 客服补偿（个人订阅调整/延长有效期）：meta.compensation 标记。
       // 正向（发赠送/延长有效期）= 赠送/后台积分发放；负向扣回（DEBIT 或 meta.giftCredits<0）= 手动调整/后台积分扣减
       if (meta.compensation === true) {

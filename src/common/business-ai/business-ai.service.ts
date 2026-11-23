@@ -1,3 +1,4 @@
+import { beforeQuotaCharge, streamBeforeQuotaCharge } from "../errors/upstream-quota"
 import { BadGatewayException, ConflictException, Injectable, Logger } from "@nestjs/common"
 import { Prisma } from "@prisma/client"
 import { createHash } from "node:crypto"
@@ -46,7 +47,7 @@ export class BusinessAiService {
     try {
       if (dto.responseFormat === "json_object") {
         const { systemPrompt, userPrompt } = this._gatewayPrompts(source, dto)
-        const result = await this.aiGatewayProvider.generateJson<Record<string, unknown>>(
+        const result = await beforeQuotaCharge(this.aiGatewayProvider.generateJson<Record<string, unknown>>(
           systemPrompt,
           userPrompt,
           {
@@ -55,7 +56,7 @@ export class BusinessAiService {
             resolveBilling: true,
             operationName: `${source} ${dto.operation}`,
           }
-        )
+        ), "step")
         const outputText = JSON.stringify(result.data)
         await this._settleOutput(userId, source, dto, outputText, result.billing, result.tokenUsage)
         return { text: outputText, billingHandled: true }
@@ -87,12 +88,16 @@ export class BusinessAiService {
     let outputText = ""
     try {
       const { systemPrompt, userPrompt } = this._gatewayPrompts(source, dto)
-      for await (const event of this.aiGatewayProvider.streamChat(systemPrompt, userPrompt, {
-        model: dto.model,
-        temperature: dto.temperature,
-        resolveBilling: true,
-        operationName: `${source} ${dto.operation}`,
-      })) {
+      for await (const event of streamBeforeQuotaCharge(this.aiGatewayProvider.streamChat(
+        systemPrompt,
+        userPrompt,
+        {
+          model: dto.model,
+          temperature: dto.temperature,
+          resolveBilling: true,
+          operationName: `${source} ${dto.operation}`,
+        }
+      ), "step")) {
         if (event.type === "usage") {
           tokenUsage = event.usage
           continue

@@ -125,6 +125,60 @@ describe("AiSplitService", () => {
     assertExactCreditsAffordable: jest.fn(),
   }
 
+  it.each([undefined, "", "- 新清单"])("创建多方向任务冻结请求清单，未传回落资料（%p）", async requested => {
+    const tx = {
+      generationTask: { create: jest.fn().mockResolvedValue({ id: 801 }) },
+      imageProject: { updateMany: jest.fn() },
+    }
+    const prisma = { generationTask: { findFirst: jest.fn().mockResolvedValue(null) },
+      $transaction: jest.fn(callback => callback(tx)) }
+    const validator = {
+      buildProjectSnapshot: jest.fn().mockResolvedValue({
+        currentProduct: baseSnapshot.currentProduct, currentProductKeys: baseSnapshot.currentProductKeys,
+        productImages: baseSnapshot.productImages, locale: "en-US", forbiddenContent: "- 原清单",
+      }),
+      loadAnalysisModel: jest.fn().mockResolvedValue(baseSnapshot.analysisModel),
+      resolveCompetitorReferences: jest.fn().mockResolvedValue([baseSnapshot.reference, baseSnapshot.reference]),
+      validateImageModel: jest.fn().mockResolvedValue({
+        publicId: "ZQ-Image-3", modelParams: { quality: "standard" }, supportsNegativePrompt: true,
+      }),
+    }
+    const runner = { getPromptVersions: jest.fn().mockReturnValue(promptVersions), run: jest.fn() }
+    const service = new AiSplitService(prisma as never, validator as never, runner as never,
+      {} as never, usage as never, {} as never)
+    jest.spyOn(service, "getTaskGroup").mockResolvedValue({} as never)
+    await service.createTasks(5, {
+      clientRequestId: "request", competitorReferences: [], site: "AMAZON_US", textAmount: "LOW",
+      model: "ZQ-Image-3", quantity: 2, promptConfig: { model_params: {}, forbiddenContent: requested },
+    }, 7)
+    expect(tx.generationTask.create).toHaveBeenCalledTimes(2)
+    for (const [args] of tx.generationTask.create.mock.calls) {
+      expect(args.data.promptConfig.generationSettings.forbiddenContent).toBe(requested ?? "- 原清单")
+      expect(args.data.promptConfig.generationSettings.modelParams).toEqual({ quality: "standard" })
+      expect(args.data.promptConfig.currentProduct).not.toHaveProperty("forbiddenContent")
+    }
+  })
+
+  it("拆图失败重试复制旧清单，不查询新产品资料", async () => {
+    const snapshot = structuredClone(baseSnapshot)
+    snapshot.generationSettings.forbiddenContent = "- 旧任务清单"
+    const original = { id: 801, projectId: 5, directionIndex: 0, groupId: "g-1", promptConfig: snapshot,
+      generatedImages: [{ id: 901, order: 0, status: "FAILED" }] }
+    const prisma = { generationTask: {
+      findFirst: jest.fn().mockResolvedValueOnce(original).mockResolvedValueOnce(null),
+      create: jest.fn().mockResolvedValue({ id: 802 }),
+    }, imageProject: { updateMany: jest.fn() } }
+    const service = new AiSplitService(prisma as never, {} as never, { run: jest.fn() } as never,
+      {} as never, usage as never, {} as never)
+    jest.spyOn(service, "getTaskGroup").mockResolvedValue({} as never)
+    await service.retryTask(801, { clientRequestId: "retry", generatedImageIds: [901] }, 7)
+    expect(prisma.generationTask.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
+      promptConfig: expect.objectContaining({ generationSettings: expect.objectContaining({
+        forbiddenContent: "- 旧任务清单", quantity: 1,
+      }) }),
+    }) }))
+  })
+
   it("按文档合同事务保存可编辑 Prompt、参数和竞品模板", async () => {
     let templateCreateArgs: unknown
     const tx = {
@@ -213,7 +267,7 @@ describe("AiSplitService", () => {
     )
   })
 
-  it("模板复用跳过 Workflow 1，从 PRODUCT_PLANNING 创建新 SKU 任务", async () => {
+  it.each([undefined, "", "- 新清单"])("模板复用从 PRODUCT_PLANNING 创建并冻结清单（%p）", async requested => {
     const savedPrompt = "历史用户确认 Prompt"
     let createdTask: Record<string, unknown> | null = null
     const templateItem = {
@@ -257,6 +311,7 @@ describe("AiSplitService", () => {
       buildProjectSnapshot: jest.fn().mockResolvedValue({
         project: { id: 5, name: "新 SKU", userId: 7, type: "ECOMMERCE", status: "DRAFT" },
         currentProduct: { productName: "New Running Board" },
+        forbiddenContent: "- 项目清单",
         currentProductKeys: ["productName"],
         productImages: baseSnapshot.productImages,
         locale: "en-US",
@@ -296,7 +351,7 @@ describe("AiSplitService", () => {
             textAmount: "LOW",
             model: "ZQ-Image-3",
             quantity: 1,
-            promptConfig: { model_params: { aspect_ratio: "463:625", size: "1728x2304" } },
+            promptConfig: { model_params: { aspect_ratio: "463:625", size: "1728x2304" }, forbiddenContent: requested },
             deliveryTarget: { aspectRatio: "463:625", resolutionTier: "2K" },
           },
         ],
@@ -306,7 +361,7 @@ describe("AiSplitService", () => {
 
     expect(validator.validateImageModel).toHaveBeenCalledWith({
       model: "ZQ-Image-3", quantity: 1,
-      promptConfig: { model_params: { aspect_ratio: "463:625", size: "1728x2304" } },
+      promptConfig: { model_params: { aspect_ratio: "463:625", size: "1728x2304" }, forbiddenContent: requested },
       deliveryTarget: { aspectRatio: "463:625", resolutionTier: "2K" },
     }, baseSnapshot.productImages)
     expect(tx.generationTask.create).toHaveBeenCalledWith(
@@ -319,12 +374,14 @@ describe("AiSplitService", () => {
             reference: { sourceType: "TEMPLATE", sourceId: 501 },
             competitorTemplate,
             gatewayCalls: {},
+            generationSettings: expect.objectContaining({ forbiddenContent: requested ?? "- 项目清单" }),
           }),
         }),
       })
     )
     expect(runner.run).toHaveBeenCalledWith(801)
     expect(result.status).toBe("GENERATING")
+    expect(result.tasks[0].forbiddenContent).toBe(requested ?? "- 项目清单")
   })
 
   it("竞品参考图列表严格按项目隔离（无归属的图不返回）", async () => {

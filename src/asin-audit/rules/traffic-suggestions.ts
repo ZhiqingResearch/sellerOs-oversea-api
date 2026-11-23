@@ -1,5 +1,58 @@
 import { uiText } from "../../common/i18n/request-language"
+import type { AuditBoardItem } from "../types/audit.types"
 import type { TrafficPrecompute, TrafficSuggestionBlock } from "../types/de.types"
+
+/** Finalized scoring state owns the recommendation state, including J2. */
+export function buildTrafficSuggestionsFromScore(
+  items: AuditBoardItem[],
+  pc: TrafficPrecompute | undefined
+): TrafficSuggestionBlock[] {
+  return items
+    .filter(item => ["G1", "G3", "I3", "J2"].includes(item.id))
+    .map(item => {
+      const base = { ruleId: item.id, subDimension: item.name, maxScore: item.maxScore }
+      if (item.status !== "verified" || item.score === null) {
+        return {
+          ...base,
+          deducted: 0,
+          level: "pending" as const,
+          summary:
+            item.status === "na"
+              ? `不适用：${item.naReason || "本项不适用"}`
+              : `证据不足：${item.pendingReason || "缺少本项核查依据"}`,
+        }
+      }
+      const deducted = Math.max(0, Math.round((item.maxScore - item.score) * 100) / 100)
+      if (!deducted)
+        return { ...base, deducted, level: "ok" as const, summary: "已核验，本项未发现问题。" }
+      const level =
+        item.id === "G1"
+          ? g1Level(deducted)
+          : item.id === "I3"
+            ? i3Level(deducted)
+            : g3Level(deducted)
+      const bt = pc?.bsrTrend
+      const summary =
+        item.id === "I3" && bt?.available
+          ? `前7天均BSR ${bt.prev7AvgBsr} → 后7天均BSR ${bt.last7AvgBsr}，保持率${bt.retainedPct}%；检查近期排名变化及商品、竞品和口碑变化。`
+          : item.deductions
+              .map(d => d.reason)
+              .filter(Boolean)
+              .join("；") || "已确认本项存在问题，请结合核查依据优化。"
+      return {
+        ...base,
+        deducted,
+        level,
+        summary,
+        ...(item.id === "G1" && pc?.positionAllocation?.length
+          ? { positionTable: pc.positionAllocation }
+          : {}),
+        ...(item.id === "G3" && pc?.opportunityList?.length
+          ? { opportunityTable: pc.opportunityList }
+          : {}),
+      }
+    })
+}
 
 /**
  * 流量四子维度建议兜底（v2.0 §八）：LLM 未输出 trafficSuggestions 时，
@@ -33,7 +86,7 @@ export function buildTrafficSuggestionsFromPrecompute(
 ): TrafficSuggestionBlock[] | undefined {
   // G1 · 当日核心词首页观测率（最高扣 8）
   const g1: TrafficSuggestionBlock = (() => {
-    if (!pc) {
+    if (!pc?.homepageHitTier || pc.pendingRules?.includes("G1") || pc.structure?.totalKw === 0) {
       return {
         subDimension: uiText("当日核心词首页观测率", "Daily core-keyword first-page visibility"),
         ruleId: "G1",
@@ -124,7 +177,7 @@ export function buildTrafficSuggestionsFromPrecompute(
 
   // G3 · 合格机会词曝光承接（最高扣 6）
   const g3: TrafficSuggestionBlock = (() => {
-    if (!pc) {
+    if (!pc || pc.pendingRules?.includes("G3") || pc.structure?.totalKw === 0) {
       return {
         subDimension: uiText("合格机会词曝光承接", "Qualified opportunity-keyword coverage"),
         ruleId: "G3",

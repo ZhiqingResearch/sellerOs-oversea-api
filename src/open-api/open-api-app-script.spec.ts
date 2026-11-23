@@ -6,6 +6,12 @@ import {
 } from "../../scripts/create-open-api-app"
 
 describe("OpenApiApp 管理脚本参数", () => {
+  it.each(["grant-computer-audit", "revoke-computer-audit"])("解析电脑审计权限：%s", action => {
+    expect(parseOpenApiAppArgs([`--${action}`, "app-1"])).toEqual({ action, appId: "app-1" })
+  })
+  it.each(["grant-automotive-audit", "revoke-automotive-audit"])("解析汽配审计权限：%s", action => {
+    expect(parseOpenApiAppArgs([`--${action}`, "app-1"])).toEqual({ action, appId: "app-1" })
+  })
   it.each(["grant-niuniu-plan", "revoke-niuniu-plan"])("解析牛牛接口权限：%s", action => {
     expect(parseOpenApiAppArgs([`--${action}`, "app-1"])).toEqual({ action, appId: "app-1" })
   })
@@ -43,6 +49,10 @@ describe("OpenApiApp 管理脚本参数", () => {
     ["--unknown"],
     ["--grant-niuniu-plan"],
     ["--revoke-niuniu-plan", "app-1", "extra"],
+    ["--grant-automotive-audit"],
+    ["--grant-computer-audit"],
+    ["--revoke-computer-audit", "app-1", "extra"],
+    ["--revoke-automotive-audit", "app-1", "extra"],
     ["--list", "extra"],
     ["--help", "extra"],
     ["--disable"],
@@ -147,6 +157,32 @@ describe("OpenApiApp 管理脚本执行（仅 mock，无数据库连接）", () 
     }
   )
 
+  it.each(["grant-computer-audit", "revoke-computer-audit"])(
+    "电脑权限仅改自身开关，不改汽配或接入方状态：%s",
+    async action => {
+      const { prisma, database, output } = setup(["selleros"])
+      await runOpenApiAppCommand(parseOpenApiAppArgs([`--${action}`, "app-1"]), prisma, output)
+      expect(database.openApiApp.updateMany).toHaveBeenCalledWith({
+        where: { appId: "app-1" },
+        data: { isComputerAuditEnabled: action === "grant-computer-audit" },
+      })
+      expect(database.openApiApp.create).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each(["grant-automotive-audit", "revoke-automotive-audit"])(
+    "汽配权限只更新自身字段，不改牛牛权限或服务状态：%s",
+    async action => {
+      const { prisma, database, output } = setup(["selleros"])
+      await runOpenApiAppCommand(parseOpenApiAppArgs([`--${action}`, "app-1"]), prisma, output)
+      expect(database.openApiApp.updateMany).toHaveBeenCalledWith({
+        where: { appId: "app-1" },
+        data: { isAutomotiveAuditEnabled: action === "grant-automotive-audit" },
+      })
+      expect(database.openApiApp.create).not.toHaveBeenCalled()
+    }
+  )
+
   it("撤权幂等，仅移除指定项目且不改变服务身份、状态或上限", async () => {
     const { prisma, tx, state, output } = setup(["selleros", "future-project"])
     const command = parseOpenApiAppArgs(["--revoke-keyb", "app-1", "selleros"])
@@ -204,6 +240,8 @@ describe("OpenApiApp 管理脚本执行（仅 mock，无数据库连接）", () 
         perCallMaxCny: true,
         keybProjectCodes: true,
         isNiuniuOperationPlanEnabled: true,
+        isAutomotiveAuditEnabled: true,
+        isComputerAuditEnabled: true,
         createdAt: true,
       },
       orderBy: { id: "asc" },

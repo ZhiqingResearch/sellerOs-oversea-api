@@ -82,6 +82,12 @@ describe("describeAuditLog", () => {
       "平台调整：充值积分 -200"
     )
     expect(
+      describeAuditLog("TEAM_ADJUST", { creditType: "PACKAGE", creditsDelta: 500 }, nameOf)
+    ).toBe("平台调整：套餐积分 +500")
+    expect(
+      describeAuditLog("TEAM_ADJUST", { creditType: "GIFT", creditsDelta: -100 }, nameOf)
+    ).toBe("平台调整：赠送积分 -100")
+    expect(
       describeAuditLog("SETTINGS_UPDATE", { from: { name: "旧名" }, to: { name: "新名" } }, nameOf)
     ).toBe("团队名称由「旧名」改为「新名」")
     expect(

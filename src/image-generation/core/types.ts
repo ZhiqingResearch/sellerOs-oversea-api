@@ -250,6 +250,7 @@ export interface CommerceData {
 }
 
 export interface ProductInfoSnapshot {
+  forbiddenContent?: string;
   productName: string;
   /** Multi-select with custom input (PRD §2 of refactor). Values are free-form
    *  country names ("US" / "美国" / "United Kingdom" / etc.); presets in

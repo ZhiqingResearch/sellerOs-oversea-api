@@ -1,3 +1,4 @@
+import { appendForbiddenContent, normalizeForbiddenContent } from "../common/utils/forbidden-content"
 import { uiLanguage } from "../common/i18n/request-language"
 // src/image-generation/generate.service.ts
 //
@@ -411,6 +412,13 @@ export class GenerateService {
     if (!form) {
       return { ok: false, status: 400, error: "Invalid or missing `form` field" };
     }
+    let forbiddenContent: string | undefined;
+    try {
+      forbiddenContent = normalizeForbiddenContent(form.productInfo?.forbiddenContent);
+    } catch (error) {
+      if (error instanceof HttpException) return { ok: false, status: 400, error: error.message };
+      throw error;
+    }
 
     // 后端执行器以 GenerationTask 行为真相源,projectId 必填(FE 始终携带)。
     const projectId = Number(form.projectId);
@@ -718,6 +726,8 @@ export class GenerateService {
       taskPrompt = `${marketplaceLanguageHead(language)}${taskPrompt}${marketplaceLanguageTail(language)}`;
     }
 
+    taskPrompt = appendForbiddenContent(taskPrompt, forbiddenContent);
+
     // ── Upload Reference Images to Spaces ──────────────────────────────
     // 照源:仅文件型主图 + 回形针 refs 上传(顺序 mainList → attachedFiles),
     // 同时充当任务 refImageUrls 快照与执行器引用图源(URL 冻结进
@@ -753,6 +763,7 @@ export class GenerateService {
       taskPrompt,
       promptResolution,
       form: {
+        ...(forbiddenContent !== undefined ? { productInfo: { forbiddenContent } } : {}),
         market: form.market,
         productName: form.productName,
         categoryL1: form.categoryL1,

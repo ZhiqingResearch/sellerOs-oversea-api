@@ -6,6 +6,9 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
+    "backfill:generation-records": "node --env-file-if-exists=.env -r ts-node/register scripts/backfill-unified-generation-records.ts",
+    "test:computer-audit": "npm run build && node --test scripts/test-computer-audit.mjs",
+    "test:automotive-audit": "npm run build && node --test scripts/test-automotive-audit.mjs scripts/test-automotive-partial-scoring.mjs",
     "chetaidou:init": "node --env-file-if-exists=.env scripts/init-chetaidou-production.mjs",
     "chetaidou:init:test": "node --test scripts/chetaidou/*.test.mjs",
     "build": "nest build",

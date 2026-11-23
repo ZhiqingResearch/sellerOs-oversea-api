@@ -74,7 +74,7 @@ export class TeamAdminController {
 
   @Post(":id/adjust")
   @ApiOperation({
-    summary: "调整（客服补偿）：赠送池充值积分（可负数扣减，不得超剩余）/ 延长有效期",
+    summary: "调整企业共享池：精确增减充值/套餐/赠送积分，可单独或同时延长有效期；扣减时不允许延长",
   })
   adjust(
     @Request() req: { user: { id: number } },

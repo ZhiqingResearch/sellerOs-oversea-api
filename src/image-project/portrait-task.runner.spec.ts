@@ -1,3 +1,4 @@
+import { UpstreamQuotaError } from "../common/errors/upstream-quota"
 import { BadGatewayException } from "@nestjs/common"
 import { PortraitTaskRunner } from "./portrait-task.runner"
 
@@ -135,4 +136,22 @@ describe("PortraitTaskRunner", () => {
     expect(tx.generationTask.updateMany).not.toHaveBeenCalled()
     expect(tx.generatedImage.updateMany).not.toHaveBeenCalled()
   })
+  it("明确额度拒绝终态化当前人像图片，网络不确定性仍走原恢复流程", async () => {
+    const { runner, tx, generator } = setup()
+    Object.assign(tx.generationTask, { count: jest.fn().mockResolvedValue(0) })
+    generator.submit.mockRejectedValue(new UpstreamQuotaError("ai-gateway"))
+    await runner.run(31)
+    expect(tx.generatedImage.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: { status: "FAILED", errorMessage: "该项数据未获取，未扣除积分" },
+    }))
+  })
+
+  it("恢复旧提交时遇到额度错误保留待核对，不假定历史任务未扣费", async () => {
+    const { runner, generator, tx } = setup()
+    generator.submit.mockRejectedValue(new UpstreamQuotaError("ai-gateway"))
+    await runner.onModuleInit()
+    await runner.run(31, true)
+    expect(tx.generatedImage.updateMany).not.toHaveBeenCalled()
+  })
+
 })

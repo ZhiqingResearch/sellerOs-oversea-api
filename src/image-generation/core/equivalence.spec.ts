@@ -33,6 +33,9 @@ const fixture: EquivalenceFixture = JSON.parse(
 // 受影响为 legacy 3072 串推导出 3K 的三例;排查与决议见
 // docs/references/2026-09-14-imagegen-special-ratio-incidents.md。
 const KNOWN_DEVIATIONS: Record<string, { fn: string; result: unknown }> = {
+  // 2026-10-30：额度耗尽独立于鉴权，未扣费承诺由业务调用点决定。
+  "retry:body-3": { fn: "classifyBodyMessage", result: { value: "permanent_quota" } },
+  "retry:friendly-permanent_quota": { fn: "friendlyMessage", result: { value: "数据未获取" } },
   "norm-tier:null-3072x3072": { fn: "normalizeResolutionTier", result: { value: "2K" } },
   "norm-tier:bogus-3072x3072": { fn: "normalizeResolutionTier", result: { value: "2K" } },
   "norm-tier:4-3072x3072": { fn: "normalizeResolutionTier", result: { value: "2K" } },
@@ -56,8 +59,8 @@ describe("image-core port equivalence (vs amazon-agent recorded matrix)", () => 
       const recorded = fixture.cases.find((c) => c.id === id);
       expect(recorded).toBeDefined();
       expect(recorded!.fn).toBe(deviation.fn);
-      // 录制值须仍是旧口径(3K);前端重录后若对齐新口径,登记应删除。
-      expect(recorded!.result).toEqual({ value: "3K" });
+      // 录制值须仍是旧口径；前端重录后若对齐新口径，登记应删除。
+      expect(recorded!.result).toEqual({ value: id === "retry:body-3" ? "permanent_auth" : id === "retry:friendly-permanent_quota" ? "图像服务额度不足，请联系管理员" : "3K" });
       expect(deviation.result).not.toEqual(recorded!.result);
     }
   });

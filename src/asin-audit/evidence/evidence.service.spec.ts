@@ -313,7 +313,7 @@ describe("EvidenceService", () => {
     expect(done.result.meta.sources).toMatchObject({
       A: ["erp"],
       B: ["erp"],
-      C: ["mcp"],
+      C: ["mcp", "sif"],
       D: ["sif"],
       E: ["sif"],
     })
@@ -398,10 +398,12 @@ describe("EvidenceService", () => {
     )
     const legacyD = adaptKeywordTrafficD(ownResponse, overviewFor(own.slice(0, 10)))
     legacyD.trafficPrecompute!.bsrTrend = done.result.D.trafficPrecompute?.bsrTrend
-    expect(done.result.C).toEqual(legacyC)
-    expect(done.result.D).toEqual(legacyD)
+    const expectedC = { ...done.result.C, ...legacyC }
+    const expectedD = { ...legacyD, group: done.result.D.group }
+    expect(done.result.C).toEqual(expectedC)
+    expect(done.result.D).toEqual(expectedD)
     expect(buildAsinAuditScoreUserPrompt(done.result)).toBe(
-      buildAsinAuditScoreUserPrompt({ ...done.result, C: legacyC, D: legacyD })
+      buildAsinAuditScoreUserPrompt({ ...done.result, C: expectedC, D: expectedD })
     )
   })
 
@@ -421,20 +423,23 @@ describe("EvidenceService", () => {
     expect(sif.batchKeywordOverview).toHaveBeenCalledTimes(4)
   })
 
-  it("竞品补查失败保持原空卡降级，自身证据和评分预计算保留", async () => {
+  it("竞品补查失败沿用主备部分证据降级，自身证据和评分预计算保留", async () => {
     sif.asinKeywordsMonthly
       .mockResolvedValueOnce(kwResp())
       .mockResolvedValueOnce({ list: [{ asin: "B0COMPET001", keyword: "new" }] })
     sif.batchKeywordOverview
       .mockResolvedValueOnce([{ keyword: "kw1", estSearchesNum: 5000 }])
-      .mockRejectedValueOnce(new Error("概览失败"))
+      .mockRejectedValueOnce(new SifApiError(-22, "概览失败"))
     const { events, error } = await collect()
     expect(error).toBeUndefined()
     const done = events.at(-1) as Extract<EvidenceSseEvent, { type: "done" }>
-    expect(done.result.C).toEqual({ filled: false, missingReason: "概览失败" })
+    expect(done.result.C.group).toMatchObject({ source: "sif", status: "partial" })
+    expect(done.result.C.keywords).toEqual([{ kw: "new", tier: "未知", searches: "未知" }])
     expect(done.result.D.kwTop[0].searchVol).toBe("5K")
     expect(done.result.D.trafficPrecompute).toBeDefined()
-    expect(done.result.meta.sifWarnings).toContain("竞品查询失败：概览失败")
+    expect(done.result.meta.sifWarnings).toContain(
+      "主备补量暂不可用，已保留可用词池与排名，相关评分待核"
+    )
   })
 
   it("爬虫失败：warning + 空 A/P/B 卡，done 仍成功", async () => {
@@ -457,10 +462,9 @@ describe("EvidenceService", () => {
       new SifApiError(-20, "SIF API 错误 -20：API 配额已用完")
     )
     const { events, error } = await collect()
-    expect(error).toBeInstanceOf(SifApiError)
+    expect(error).toBeInstanceOf(Error)
     expect(service.toErrorEvent(error)).toEqual({
-      message: "SIF API 错误 -20：API 配额已用完",
-      code: -20,
+      message: "数据未获取，未扣除积分",
     })
     expect(events.some(e => e.type === "done")).toBe(false) // done 未发出
   })
@@ -475,7 +479,7 @@ describe("EvidenceService", () => {
     ).toBe(true)
     const done = events.at(-1) as Extract<EvidenceSseEvent, { type: "done" }>
     expect(done.result.C.filled).toBe(false)
-    expect(done.result.C.missingReason).toBe("MCP 挂了")
+    expect(done.result.C.missingReason).toBe("竞品数据暂不可用")
   })
 
   it("C 卡配件过滤：打印纸/支架候选剔除，真竞品保留 + 过滤 warning", async () => {
@@ -537,13 +541,7 @@ describe("EvidenceService", () => {
     const done = events.at(-1) as Extract<EvidenceSseEvent, { type: "done" }>
     expect(done.result.C.filled).toBe(true)
     expect(done.result.C.competitorAsins).toEqual(["B0COMPET001", "B0COMPET002"])
-    expect(
-      events.some(
-        e =>
-          e.type === "warning" &&
-          (e as { message: string }).message.includes("竞品品类过滤参照获取失败")
-      )
-    ).toBe(true)
+    expect(sif.batchAsinDetail).not.toHaveBeenCalled()
   })
 
   it("B 卡：评论为空跳过痛点；痛点失败 warning 回退基础卡", async () => {
@@ -627,6 +625,8 @@ describe("EvidenceService", () => {
   it("固定积分：evidence-module 场景预检并成功后扣 5（stage=evidence，source=取证）", async () => {
     const { events } = await collect(dto({ scene: "evidence-module" }))
     expect(events.at(-1)?.type).toBe("done")
+    const done = events.at(-1) as Extract<EvidenceSseEvent, { type: "done" }>
+    expect(done.result.meta.generationRequestId).toEqual(expect.any(String))
     expect(billing.assertFixedStageAffordable).toHaveBeenCalledWith(7, "ZQ-Think-Flash", "evidence")
     expect(billing.chargeFixedStage).toHaveBeenCalledWith(
       7,

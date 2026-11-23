@@ -1,3 +1,4 @@
+import { isUpstreamQuotaError, quotaTaskMessage } from "../common/errors/upstream-quota"
 import {
   BadRequestException,
   ForbiddenException,
@@ -422,14 +423,14 @@ export class BeautyWorkflowService {
       this.logger.error(
         `[美妆视频] Gateway 提交失败 task=${taskId}: ${error instanceof Error ? error.message : String(error)}`
       )
-      // 仅网关明确拒绝（400/404 参数不合法/模型下架）才终态化；
-      // 429/401/403/5xx/超时视为瞬态或结果不确定，保留 GENERATING 等启动恢复按幂等键重提
-      if (!(error instanceof BadRequestException)) return
+      // 仅网关明确拒绝（参数不合法/模型下架/明确额度耗尽）才终态化；
+      // 普通 429/401/403/5xx/超时视为瞬态或结果不确定，保留 GENERATING 等启动恢复按幂等键重提
+      if (!(error instanceof BadRequestException) && !isUpstreamQuotaError(error)) return
       await this.prisma.beautyTask.updateMany({
         where: { id: taskId, status: "GENERATING", deletedAt: null },
         data: {
           status: "FAILED",
-          errorMessage: "AI Gateway 美妆视频任务提交失败",
+          errorMessage: quotaTaskMessage(error, "not_charged", "AI Gateway 美妆视频任务提交失败", "item"),
           finishedAt: new Date(),
         },
       })

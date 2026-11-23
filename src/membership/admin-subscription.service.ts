@@ -7,7 +7,11 @@ import { maskPhone } from "../common/utils/mask"
 import { PrismaService } from "../prisma/prisma.service"
 import { CreditService } from "./credit.service"
 import { AdjustSubscriptionDto, QueryAdminSubscriptionDto } from "./dto/admin-subscription.dto"
-import { DAY_MS, PACKAGE_EXPIRE_DAYS } from "./membership.constants"
+import {
+  ADMIN_ADJUSTABLE_CREDIT_BUCKETS,
+  DAY_MS,
+  PACKAGE_EXPIRE_DAYS,
+} from "./membership.constants"
 
 type Tx = Prisma.TransactionClient
 
@@ -19,8 +23,8 @@ export type SubscriptionStatus = "ACTIVE" | "EXPIRING" | "EXPIRED"
 /**
  * 后台个人订阅（客户运营·个人订阅 tab）：
  * - 列表：Lv.1-3 订阅用户（在期/临期/过期 + 到期升序）+ MRR 汇总（USD 口径）；
- * - 客服补偿调整：赠送积分（可负数扣回）/ 延长有效期，写 MANUAL_ADJUST 流水（meta.compensation=true），
- *   明示不产生订单、不开收据。
+ * - 平台调整：RECHARGE/PACKAGE/GIFT 精确增减，可单独或同时延长有效期；
+ *   明示不产生订单、不开收据。旧 giftCredits 字段保留兼容。
  */
 @Injectable()
 export class AdminSubscriptionService {
@@ -62,9 +66,10 @@ export class AdminSubscriptionService {
     const ids = rows.map(r => r.id)
     const balanceRows = ids.length
       ? await this.prisma.creditLot.groupBy({
-          by: ["userId"],
+          by: ["userId", "bucket"],
           where: {
             userId: { in: ids },
+            teamId: null,
             bucket: { in: [CreditBucket.RECHARGE, CreditBucket.PACKAGE, CreditBucket.GIFT] },
             status: CreditLotStatus.ACTIVE,
             OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
@@ -72,15 +77,41 @@ export class AdminSubscriptionService {
           _sum: { remaining: true },
         })
       : []
-    const pointsByUser = new Map<number, Decimal>(
-      balanceRows.map(b => [b.userId, b._sum.remaining ?? new Decimal(0)])
-    )
+    const balancesByUser = new Map<number, Record<CreditBucket, Decimal>>()
+    for (const row of balanceRows) {
+      const buckets =
+        balancesByUser.get(row.userId) ??
+        ({
+          [CreditBucket.RECHARGE]: new Decimal(0),
+          [CreditBucket.PACKAGE]: new Decimal(0),
+          [CreditBucket.GIFT]: new Decimal(0),
+          [CreditBucket.REBATE]: new Decimal(0),
+        } satisfies Record<CreditBucket, Decimal>)
+      buckets[row.bucket] = row._sum.remaining ?? new Decimal(0)
+      balancesByUser.set(row.userId, buckets)
+    }
 
     return {
-      items: rows.map(r => ({
-        ...this.toItem(r, now, expiringBefore),
-        points: (pointsByUser.get(r.id) ?? new Decimal(0)).toString(),
-      })),
+      items: rows.map(r => {
+        const buckets =
+          balancesByUser.get(r.id) ??
+          ({
+            [CreditBucket.RECHARGE]: new Decimal(0),
+            [CreditBucket.PACKAGE]: new Decimal(0),
+            [CreditBucket.GIFT]: new Decimal(0),
+            [CreditBucket.REBATE]: new Decimal(0),
+          } satisfies Record<CreditBucket, Decimal>)
+        const points = buckets[CreditBucket.RECHARGE]
+          .plus(buckets[CreditBucket.PACKAGE])
+          .plus(buckets[CreditBucket.GIFT])
+        return {
+          ...this.toItem(r, now, expiringBefore),
+          points: points.toString(),
+          rechargePoints: buckets[CreditBucket.RECHARGE].toString(),
+          packagePoints: buckets[CreditBucket.PACKAGE].toString(),
+          giftPoints: buckets[CreditBucket.GIFT].toString(),
+        }
+      }),
       total,
       page,
       pageSize,
@@ -266,15 +297,38 @@ export class AdminSubscriptionService {
   }
 
   /**
-   * 客服补偿调整：赠送积分（正=发 GIFT 批次 30 天过期 / 负=按过期先后从 PACKAGE+GIFT 扣回，不得超剩余）
-   * + 延长有效期（在当前到期时刻上顺延；从未订阅过则以现在为基准）。两者至少传一项。
-   * 写一条 MANUAL_ADJUST 流水（source=客服补偿赠送，meta.compensation=true）；不产生订单、不开收据。
+   * 平台调整个人积分（RECHARGE/PACKAGE/GIFT 精确增减）或延长有效期。
+   * 新字段：creditType + creditsDelta；旧 giftCredits 保留兼容。
+   * 扣减积分不允许同时延长有效期；增加 PACKAGE/GIFT 时若延长则跟随新有效期。
    */
   async adjust(userId: number, operatorId: number, dto: AdjustSubscriptionDto) {
-    if (dto.giftCredits == null && dto.extendDays == null) {
+    const hasCreditType = dto.creditType != null
+    const hasExplicitCredits = dto.creditsDelta != null
+    const hasNewCreditAdjustment = hasCreditType || hasExplicitCredits
+    const hasLegacyGiftAdjustment = dto.giftCredits != null
+
+    if (hasNewCreditAdjustment && hasLegacyGiftAdjustment) {
+      throw new BadRequestException("creditType/creditsDelta 与 giftCredits 不能同时使用")
+    }
+    if (!hasNewCreditAdjustment && !hasLegacyGiftAdjustment && dto.extendDays == null) {
       throw new BadRequestException("没有需要调整的内容")
     }
-    if (dto.giftCredits === 0) throw new BadRequestException("调整积分不能为 0")
+    if (hasNewCreditAdjustment) {
+      if (dto.creditType == null || dto.creditsDelta == null) {
+        throw new BadRequestException("creditType 与 creditsDelta 必须同时传入")
+      }
+      if (dto.creditsDelta === 0) throw new BadRequestException("调整积分不能为 0")
+      if (!ADMIN_ADJUSTABLE_CREDIT_BUCKETS.includes(dto.creditType)) {
+        throw new BadRequestException("不支持调整该积分类型")
+      }
+    }
+    if (hasLegacyGiftAdjustment && dto.giftCredits === 0) {
+      throw new BadRequestException("调整积分不能为 0")
+    }
+    const deducting = hasNewCreditAdjustment ? dto.creditsDelta! < 0 : (dto.giftCredits ?? 0) < 0
+    if (hasNewCreditAdjustment && deducting && dto.extendDays != null) {
+      throw new BadRequestException("扣减积分时不允许延长有效期")
+    }
 
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -283,15 +337,48 @@ export class AdminSubscriptionService {
     if (!user) throw new NotFoundException("用户不存在")
 
     const meta: Record<string, unknown> = {
-      compensation: true,
+      compensation: hasNewCreditAdjustment ? !deducting : true,
+      adminAdjustment: hasNewCreditAdjustment,
       reason: dto.reason ?? null,
+      creditType: dto.creditType ?? null,
+      creditsDelta: dto.creditsDelta ?? null,
       giftCredits: dto.giftCredits ?? null,
       extendDays: dto.extendDays ?? null,
       operatorId,
     }
 
     const newExpiresAt = await this.prisma.$transaction(async tx => {
-      if (dto.giftCredits != null && dto.giftCredits > 0) {
+      let updated: Date | null = null
+      if (dto.extendDays != null) {
+        const base =
+          user.subscriptionExpiresAt && (!hasNewCreditAdjustment || user.subscriptionExpiresAt > new Date())
+            ? user.subscriptionExpiresAt
+            : new Date()
+        updated = new Date(base.getTime() + dto.extendDays * DAY_MS)
+        await tx.user.update({
+          where: { id: userId },
+          data: { subscriptionExpiresAt: updated },
+        })
+        // 2026-09-02 bug22：调整套餐到期日同步顺延仍有效的套餐批次（RECHARGE_PLAN 来源
+        // PACKAGE/GIFT，只延不缩），与续费存量顺延同口径；注册赠送等其他来源批次不动
+        await this.credit.extendPlanLotExpiryInTx(tx, userId, updated)
+      }
+
+      if (hasNewCreditAdjustment) {
+        const expiresAt =
+          dto.creditType === CreditBucket.RECHARGE || dto.extendDays == null ? null : updated
+        await this.credit.adjustCreditsByBucket(
+          userId,
+          dto.creditType!,
+          dto.creditsDelta!,
+          {
+            expiresAt,
+            source: "admin.subscription.adjust",
+            meta,
+          },
+          tx
+        )
+      } else if (dto.giftCredits != null && dto.giftCredits > 0) {
         await this.credit.grant(
           userId,
           CreditBucket.GIFT,
@@ -308,45 +395,63 @@ export class AdminSubscriptionService {
         await this.deductGiftInTx(userId, -dto.giftCredits, meta, tx)
       }
 
-      let updated: Date | null = null
-      if (dto.extendDays != null) {
-        const base = user.subscriptionExpiresAt ?? new Date()
-        updated = new Date(base.getTime() + dto.extendDays * DAY_MS)
-        await tx.user.update({
-          where: { id: userId },
-          data: { subscriptionExpiresAt: updated },
+      if (!hasNewCreditAdjustment && dto.giftCredits == null && dto.extendDays != null) {
+        // 纯延长有效期也留一条 0 积分流水，充值记录可见「后台积分发放（延长有效期）」便于对账
+        const balanceAfter = await this.credit.consumableBalance(tx, userId)
+        await tx.creditTransaction.create({
+          data: {
+            userId,
+            direction: "CREDIT",
+            bucket: null,
+            type: CreditTxnType.MANUAL_ADJUST,
+            amount: 0,
+            balanceAfter,
+            source: "客服补偿赠送",
+            meta: meta as Prisma.InputJsonValue,
+          },
         })
-        // 2026-09-02 bug22：调整套餐到期日同步顺延仍有效的套餐批次（RECHARGE_PLAN 来源
-        // PACKAGE/GIFT，只延不缩），与续费存量顺延同口径；注册赠送等其他来源批次不动
-        await this.credit.extendPlanLotExpiryInTx(tx, userId, updated)
-        if (dto.giftCredits == null) {
-          // 纯延长有效期也留一条 0 积分流水，充值记录可见「客服补偿赠送（延长有效期）」便于对账
-          const balanceAfter = await this.credit.consumableBalance(tx, userId)
-          await tx.creditTransaction.create({
-            data: {
-              userId,
-              direction: "CREDIT",
-              bucket: null,
-              type: CreditTxnType.MANUAL_ADJUST,
-              amount: 0,
-              balanceAfter,
-              source: "客服补偿赠送",
-              meta: meta as Prisma.InputJsonValue,
-            },
-          })
-        }
       }
       return updated
     })
 
+    const buckets = await this.getBucketBalances(userId)
     this.logger.log(
-      `adjustSubscription user=${userId} op=${operatorId} gift=${dto.giftCredits ?? "-"} extend=${dto.extendDays ?? "-"}`
+      `adjustSubscription user=${userId} op=${operatorId} type=${dto.creditType ?? "-"} delta=${dto.creditsDelta ?? dto.giftCredits ?? "-"} extend=${dto.extendDays ?? "-"}`
     )
     return {
       userId,
+      creditType: dto.creditType ?? null,
+      creditsDelta: dto.creditsDelta ?? null,
       giftCredits: dto.giftCredits ?? null,
       extendDays: dto.extendDays ?? null,
       subscriptionExpiresAt: newExpiresAt?.toISOString() ?? null,
+      buckets,
+    }
+  }
+
+  /** 个人三桶余额（仅个人批次、ACTIVE 且未过期；含欠账负批次）。 */
+  private async getBucketBalances(userId: number) {
+    const rows = await this.prisma.creditLot.groupBy({
+      by: ["bucket"],
+      where: {
+        userId,
+        teamId: null,
+        bucket: { in: [CreditBucket.RECHARGE, CreditBucket.PACKAGE, CreditBucket.GIFT] },
+        status: CreditLotStatus.ACTIVE,
+        OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+      },
+      _sum: { remaining: true },
+    })
+    const get = (bucket: CreditBucket) =>
+      rows.find(row => row.bucket === bucket)?._sum.remaining ?? new Decimal(0)
+    const recharge = get(CreditBucket.RECHARGE)
+    const packageCredits = get(CreditBucket.PACKAGE)
+    const gift = get(CreditBucket.GIFT)
+    return {
+      recharge: recharge.toString(),
+      package: packageCredits.toString(),
+      gift: gift.toString(),
+      total: recharge.plus(packageCredits).plus(gift).toString(),
     }
   }
 

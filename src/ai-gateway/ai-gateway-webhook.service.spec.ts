@@ -1,3 +1,4 @@
+jest.mock("../generation-record/generation-record-success", () => ({ recordGenerationSuccess: jest.fn().mockResolvedValue(undefined) }))
 import { BadRequestException, UnauthorizedException } from "@nestjs/common"
 import { ConfigService } from "@nestjs/config"
 import { Decimal } from "@prisma/client/runtime/library"
@@ -2425,4 +2426,38 @@ describe("AiGatewayWebhookService", () => {
       })
     ).rejects.toBeInstanceOf(UnauthorizedException)
   })
+  it.each(["fixed", "positive", "zero", "unknown"])("额度失败按实际费用状态选择文案：%s", async mode => {
+    const { service, tx, gateway, usage } = setup()
+    const amount = mode === "zero" ? "0" : "1.25"
+    gateway.validateVideoTask.mockReturnValue(mode === "unknown" ? null : { amount, currency: "CNY" })
+    if (mode === "fixed") usage.gatewayFixedVideoCreditsPerSec.mockResolvedValue(new Map([["|1080p", new Decimal(15)]]))
+    const task: VideoTask = {
+      id: "task_123", object: "video.task", status: "failed", model: "sourcing-veo-fast-i2v",
+      request_id: "quota-request", created_at: 1, completed_at: 2,
+      error: { type: "provider_error", code: "insufficient_quota", message: "private supplier balance" },
+    }
+    await service.applyVideoTask(task, `quota-${mode}`)
+    expect(updateDataOf(tx.videoTask.updateMany)).toMatchObject({
+      status: "FAILED",
+      errorMessage: ["fixed", "zero"].includes(mode) ? "该项数据未获取，未扣除积分" : "该项数据未获取",
+      gatewayError: expect.objectContaining({ code: "insufficient_quota", message: "private supplier balance" }),
+    })
+    expect(usage.chargeModelInTransaction).toHaveBeenCalledTimes(mode === "positive" ? 1 : 0)
+  })
+
+  it("部分图片额度失败保留成功图片与原扣费，不声称整批免费", async () => {
+    const { service, tx, usage } = setupImage()
+    const task: ImageTask = {
+      id: "image_task_1", object: "image.task", status: "failed", model: "ZQ-Image-1",
+      request_id: "partial-quota", created_at: 1, completed_at: 2,
+      error: { type: "provider_error", code: "insufficient_quota", message: "no credits" },
+      partial_result: { images: [{ url: "https://gateway.example.com/partial.png" }] },
+    }
+    await service.applyImageTask(task, "partial-quota")
+    expect(tx.generationTask.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: "FAILED", errorMessage: "部分数据未获取" }),
+    }))
+    expect(usage.chargeModelInTransaction).toHaveBeenCalledTimes(1)
+  })
+
 })

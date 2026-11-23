@@ -1,7 +1,8 @@
+import { streamBeforeQuotaCharge } from "../common/errors/upstream-quota"
 import { Injectable, Logger } from "@nestjs/common"
 import { uiLanguage, uiText, withUiLanguage } from "../common/i18n/request-language"
 import { AiGatewayProvider } from "../common/providers/ai-gateway.provider"
-import { isJsonObject } from "../common/utils/canonical-json"
+import { hashJson, isJsonObject } from "../common/utils/canonical-json"
 import { AsinAuditBilling } from "./asin-audit.billing"
 import type { AsinAuditSseEvent } from "./asin-audit.types"
 import { asinAuditActionLabel } from "./asin-audit.types"
@@ -268,6 +269,23 @@ export function finalizeScoreResult(
     a1BrandInTitle: brandPrecheck?.inTitle ?? null,
   })
 
+  const restrictedTraffic = evidence.D.group?.source === "xiyou" || evidence.D.group?.status === "partial"
+  const pending = new Set([...(evidence.D.trafficPrecompute?.pendingRules ?? []), ...(restrictedTraffic ? ["G1", "G3", "J2"] : [])])
+  for (const board of boards) for (const item of board.items) {
+    if (pending.has(item.id)) {
+      item.status = "pending"
+      item.score = null
+      item.deductions = []
+      item.pendingReason = "当前来源缺少固定词池、当日完整观测或基期证据，本次不评分"
+    }
+    if (item.id === "I3" && evidence.E.groups?.bsr?.source === "xiyou") {
+      const trend = evidence.D.trafficPrecompute?.bsrTrend
+      item.status = trend?.available ? "verified" : "pending"
+      item.score = trend?.available ? trend.tier.score : null
+      item.deductions = []
+      if (!trend?.available) item.pendingReason = trend?.reason ?? "同类目日级 BSR 证据不足"
+    }
+  }
   const { scoring, boardScores, domainScores } = recomputeAggregates(boards)
 
   // total：覆盖率 ≥60% 且 V>0 才出总分；否则 null（前端展示折算分 + 覆盖率）
@@ -381,12 +399,12 @@ export class AuditScoreService {
     const systemPrompt = `${buildAsinAuditScoreSkill(category)}\n\n${modelResponseLanguageDirective(responseLanguage)}`
 
     let textBuffer = ""
-    for await (const event of this.gateway.streamChat(systemPrompt, userPrompt, {
+    for await (const event of streamBeforeQuotaCharge(this.gateway.streamChat(systemPrompt, userPrompt, {
       model: dto.model,
       temperature: 0,
       operationName: `ASIN 审计${asinAuditActionLabel("score")}`,
       resolveBilling: true,
-    })) {
+    }), "operation")) {
       if (event.type === "text") {
         textBuffer += event.content
         yield { type: "text", content: event.content }
@@ -408,9 +426,11 @@ export class AuditScoreService {
         const result = withUiLanguage(responseLanguage, () =>
           finalizeScoreResult(payload, evidence)
         )
+        const resultHash = hashJson(JSON.parse(JSON.stringify(result)) as unknown)
         // 固定价模型走一口价 20（打分含审计链取证成本），非固定模型回落按量
         const billed =
           (await this.billing.chargeFixedStage(userId, dto.model, "score", {
+            resultHash,
             ...(dto.clientRequestId ? { clientRequestId: dto.clientRequestId } : {}),
           })) ||
           (await this.billing.charge(
@@ -418,7 +438,8 @@ export class AuditScoreService {
             dto.model,
             "score",
             event.billing,
-            dto.clientRequestId
+            dto.clientRequestId,
+            { meta: { resultHash } }
           ))
         this.logger.log(
           `[asin-audit] score finalized userId=${userId} asin=${evidence.asin} category=${category ?? "generic"} total=${result.total} coverage=${result.scoring.coverageRate}`

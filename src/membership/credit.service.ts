@@ -15,9 +15,12 @@ import { beijingMonthStart } from "../common/utils/datetime"
 import { quantize4 } from "../common/utils/decimal"
 import { PrismaService } from "../prisma/prisma.service"
 import {
+  ADMIN_ADJUSTABLE_CREDIT_BUCKETS,
+  AdminAdjustableCreditBucket,
   CREDIT_PER_CNY,
   DAY_MS,
   DEFAULT_LEVEL2_REBATE_RATE,
+  PACKAGE_EXPIRE_DAYS,
   consumeBucketTiers,
   resolveLevel,
 } from "./membership.constants"
@@ -44,6 +47,12 @@ export interface ConsumeResult {
   costCny: Decimal // 原始人民币成本
   breakdown: ConsumeBreakdownItem[] // 跨桶扣减明细
   balanceAfter: Decimal // 扣后可消费积分余额（RECHARGE + PACKAGE + GIFT）
+}
+
+export interface AdminCreditAdjustResult {
+  creditsDelta: Decimal
+  bucketBalanceAfter: Decimal
+  totalBalanceAfter: Decimal
 }
 
 /**
@@ -287,6 +296,135 @@ export class CreditService {
       : this.prisma.$transaction(run, {
           isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
         })
+  }
+
+  /**
+   * 平台后台按精确积分桶增减（个人或企业共享池）：
+   * - 只允许 RECHARGE / PACKAGE / GIFT；
+   * - 正数新建对应桶批次，负数从对应桶 FIFO 扣减并带 FOR UPDATE 行锁；
+   * - RECHARGE 永不过期；PACKAGE/GIFT 未指定 expiresAt 时默认 30 天；
+   * - 写一条 MANUAL_ADJUST 流水，bucket 始终记录真实积分桶。
+   */
+  async adjustCreditsByBucket(
+    userId: number,
+    bucket: AdminAdjustableCreditBucket,
+    delta: Decimal | number | string,
+    opts: {
+      teamId?: number | null
+      expiresAt?: Date | null
+      source?: string
+      sourceRef?: string
+      meta?: Record<string, unknown>
+    } = {},
+    tx?: Tx
+  ): Promise<AdminCreditAdjustResult> {
+    if (!ADMIN_ADJUSTABLE_CREDIT_BUCKETS.includes(bucket)) {
+      throw new BadRequestException("不支持调整该积分类型")
+    }
+    const amt = new Decimal(delta)
+    if (amt.isZero()) throw new BadRequestException("调整积分不能为 0")
+
+    const run = async (c: Tx): Promise<AdminCreditAdjustResult> => {
+      const teamId = opts.teamId ?? null
+      if (amt.greaterThan(0)) {
+        const expiresAt =
+          bucket === CreditBucket.RECHARGE
+            ? null
+            : (opts.expiresAt ?? new Date(Date.now() + PACKAGE_EXPIRE_DAYS * DAY_MS))
+        await c.creditLot.create({
+          data: {
+            userId,
+            bucket,
+            amount: amt,
+            remaining: amt,
+            expiresAt,
+            sourceType: CreditTxnType.MANUAL_ADJUST,
+            sourceRef: opts.sourceRef ?? null,
+            status: CreditLotStatus.ACTIVE,
+            teamId,
+          },
+        })
+      } else {
+        const need = amt.abs()
+        const ownerScope =
+          teamId == null
+            ? Prisma.sql`userId = ${userId} AND teamId IS NULL`
+            : Prisma.sql`teamId = ${teamId}`
+        const lots = await c.$queryRaw<Array<{ id: number; remaining: Prisma.Decimal }>>(
+          Prisma.sql`
+            SELECT id, remaining
+            FROM CreditLot
+            WHERE ${ownerScope}
+              AND bucket = ${bucket}
+              AND status = ${CreditLotStatus.ACTIVE}
+              AND (expiresAt IS NULL OR expiresAt > NOW())
+            ORDER BY (expiresAt IS NULL) ASC, expiresAt ASC, grantedAt ASC, id ASC
+            FOR UPDATE
+          `
+        )
+        const available = lots.reduce((sum, lot) => sum.plus(lot.remaining), new Decimal(0))
+        if (available.lessThan(need)) {
+          throw new BadRequestException(
+            `${this.adminBucketLabel(bucket)}余额不足，减少量不得超过剩余`
+          )
+        }
+
+        let remaining = need
+        for (const lot of lots) {
+          if (remaining.lessThanOrEqualTo(0)) break
+          const lotRemaining = new Decimal(lot.remaining)
+          if (lotRemaining.lessThanOrEqualTo(0)) continue
+          const take = Decimal.min(lotRemaining, remaining)
+          const newRemaining = lotRemaining.minus(take)
+          await c.creditLot.update({
+            where: { id: lot.id },
+            data: {
+              remaining: newRemaining,
+              status: newRemaining.lessThanOrEqualTo(0)
+                ? CreditLotStatus.EXHAUSTED
+                : CreditLotStatus.ACTIVE,
+            },
+          })
+          remaining = remaining.minus(take)
+        }
+      }
+
+      const bucketBalanceAfter = await this.bucketBalance(c, userId, bucket, teamId)
+      const totalBalanceAfter =
+        teamId == null
+          ? await this.consumableBalance(c, userId)
+          : await this.teamPoolBalance(teamId, c)
+      await c.creditTransaction.create({
+        data: {
+          userId,
+          direction: amt.greaterThan(0) ? CreditDirection.CREDIT : CreditDirection.DEBIT,
+          bucket,
+          type: CreditTxnType.MANUAL_ADJUST,
+          amount: amt.abs(),
+          balanceAfter: totalBalanceAfter,
+          source: opts.source ?? null,
+          teamId,
+          meta: opts.meta as Prisma.InputJsonValue | undefined,
+        },
+      })
+      return {
+        creditsDelta: amt,
+        bucketBalanceAfter,
+        totalBalanceAfter,
+      }
+    }
+
+    return tx
+      ? run(tx)
+      : this.prisma.$transaction(run, {
+          isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
+        })
+  }
+
+  private adminBucketLabel(bucket: AdminAdjustableCreditBucket): string {
+    if (bucket === CreditBucket.RECHARGE) return "充值积分"
+    if (bucket === CreditBucket.PACKAGE) return "套餐积分"
+    return "赠送积分"
   }
 
   /**
@@ -1629,12 +1767,16 @@ export class CreditService {
       : this.consumableBalance(tx, userId)
   }
 
-  /** 某桶当前余额（ACTIVE 且未过期批次 remaining 之和；含透支负批次；仅个人批次 teamId=null）。仅在事务内调用。 */
-  private async bucketBalance(tx: Tx, userId: number, bucket: CreditBucket): Promise<Decimal> {
+  /** 某桶当前余额（ACTIVE 且未过期批次 remaining 之和；含透支负批次）。仅在事务内调用。 */
+  private async bucketBalance(
+    tx: Tx,
+    userId: number,
+    bucket: CreditBucket,
+    teamId: number | null = null
+  ): Promise<Decimal> {
     const agg = await tx.creditLot.aggregate({
       where: {
-        userId,
-        teamId: null,
+        ...(teamId == null ? { userId, teamId: null } : { teamId }),
         bucket,
         status: CreditLotStatus.ACTIVE,
         OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
@@ -2310,7 +2452,11 @@ export class CreditService {
    * 可用额度按「消费者本人正净额 + 邀请人正净额」计算，余额不足抛 400。
    * 供视频等「先提交、出片后才结算」的链路在提交时挡住没余额的请求，避免白跑生成。
    */
-  async assertAffordable(userId: number, costCny: Decimal | number | string, exactCredits?: Decimal): Promise<void> {
+  async assertAffordable(
+    userId: number,
+    costCny: Decimal | number | string,
+    exactCredits?: Decimal
+  ): Promise<void> {
     // 与非嵌套 consume 一致：预检前先激活已到期的续费，避免漏算刚生效的本人额度。
     await this.activateDuePlans(userId)
     const user = await this.prisma.user.findUnique({

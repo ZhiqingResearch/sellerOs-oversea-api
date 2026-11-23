@@ -1,3 +1,4 @@
+jest.mock("../generation-record/generation-record-success", () => ({ recordGenerationSuccess: jest.fn().mockResolvedValue(undefined) }))
 import { InvokeType } from "@prisma/client"
 import { Decimal } from "@prisma/client/runtime/library"
 import { GenerationTaskRunnerService } from "./executor/generation-task-runner.service"
@@ -53,6 +54,7 @@ describe("图片扣费调用方式", () => {
         {} as never,
         jest.fn(),
         usage as never,
+        {} as never,
         {} as never
       )
       itemRunner["loadFixedCredits"] = jest

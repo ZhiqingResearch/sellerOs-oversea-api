@@ -1,4 +1,5 @@
 import { localizeErrorMessage, uiText } from "../common/i18n/request-language"
+import { UPSTREAM_QUOTA_CODE, quotaMessage } from "../common/errors/upstream-quota"
 /** 面向用户的组合失败提示；技术详情保留在 Call 账本中。 */
 export const COMPOSITION_INVALID_MESSAGE =
   "本次未能完成组合，请点击「重新组织」再试一次，已选内容会保留。"
@@ -14,6 +15,7 @@ interface GenerationError {
 
 /** 联想读接口只输出产品提示；原始模型、校验及服务错误留在数据库中排查。 */
 function ideationErrorMessage(error: GenerationError, fallback: string): string | null {
+  if (error.errorCode === UPSTREAM_QUOTA_CODE) return error.errorMessage ?? quotaMessage("unknown", "step")
   if (error.errorCode === "PROVIDER_TIMEOUT") return uiText(TEXT_TIMEOUT_MESSAGE, "Timed out. Please retry.")
   if (
     error.errorCode === "CALL_STATUS_UNKNOWN" ||
@@ -33,6 +35,7 @@ export function groupErrorMessage(group: GenerationError): string | null {
 
 /** 读路径兼容历史技术错误，不改写历史记录；待核对状态单独提示。 */
 export function taskErrorMessage(task: GenerationError & { type: string }): string | null {
+  if (task.errorCode === UPSTREAM_QUOTA_CODE) return task.errorMessage ?? quotaMessage("unknown", "step")
   if (task.type === "BREAKDOWN" && task.errorCode === "IMAGE_UNRELATED_TO_SKU") {
     return uiText(BREAKDOWN_UNRELATED_MESSAGE, "The uploaded image is unrelated to this product. Upload relevant product materials.")
   }

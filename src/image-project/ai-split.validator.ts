@@ -83,6 +83,7 @@ type ProductProfileWithLocalizations = Prisma.ProductProfileGetPayload<{
 }>
 
 export interface AiSplitProjectSnapshot {
+  forbiddenContent?: string | null
   project: { id: number; name: string; userId: number; type: string; status: string }
   currentProduct: Record<string, unknown>
   currentProductKeys: string[]
@@ -414,7 +415,10 @@ export class AiSplitValidator {
       throw new BadRequestException("当前 SKU 至少需要一张 PRODUCT_MAIN 主图")
     }
 
-    return { project, currentProduct, currentProductKeys, productImages, locale, language }
+    return {
+      project, currentProduct, currentProductKeys, productImages, locale, language,
+      forbiddenContent: project.productProfile?.forbiddenContent,
+    }
   }
 
   async resolveCompetitorReferences(

@@ -1,8 +1,21 @@
 import { plainToInstance } from "class-transformer"
 import { validateSync } from "class-validator"
-import { CreateAiSplitTaskDto } from "./ai-split.dto"
+import { AiSplitPromptConfigDto, CreateAiSplitTaskDto } from "./ai-split.dto"
 
 describe("CreateAiSplitTaskDto — site 动态格式校验", () => {
+  it("清单与原生参数同级通过白名单，拒绝非字符串", () => {
+    const dto = plainToInstance(AiSplitPromptConfigDto, {
+      model_params: { quality: "standard" }, forbiddenContent: "- 禁止",
+    })
+    expect(validateSync(dto, { whitelist: true })).toEqual([])
+    expect(dto.forbiddenContent).toBe("- 禁止")
+    expect(dto.model_params).toEqual({ quality: "standard" })
+    for (const value of [null, 123, {}]) {
+      expect(validateSync(plainToInstance(AiSplitPromptConfigDto, {
+        model_params: {}, forbiddenContent: value,
+      }))).not.toEqual([])
+    }
+  })
   function siteErrors(site: unknown): string[] {
     const dto = plainToInstance(CreateAiSplitTaskDto, { site })
     return validateSync(dto)

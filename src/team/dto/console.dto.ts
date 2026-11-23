@@ -16,6 +16,40 @@ import {
   ValidateNested,
 } from "class-validator"
 
+/** 成员列表筛选：条件取交集，缺省不过滤 */
+export class QueryMembersDto {
+  @ApiPropertyOptional({
+    example: "张明",
+    description: "姓名/手机号/邮箱包含匹配，忽略首尾空格及大小写",
+  })
+  @IsOptional()
+  @IsString()
+  keyword?: string
+
+  @ApiPropertyOptional({ enum: ["ADMIN", "MEMBER"], description: "企业内角色" })
+  @IsOptional()
+  @IsIn(["ADMIN", "MEMBER"])
+  role?: "ADMIN" | "MEMBER"
+
+  @ApiPropertyOptional({ enum: ["ACTIVE", "DISABLED"], description: "正常/已停用；归档页不传" })
+  @IsOptional()
+  @IsIn(["ACTIVE", "DISABLED"])
+  status?: "ACTIVE" | "DISABLED"
+
+  @ApiPropertyOptional({
+    enum: ["SUFFICIENT", "NEAR_LIMIT", "EXHAUSTED", "UNLIMITED"],
+    description: "额度充足(<90%)/接近上限(≥90%且<100%)/已用尽(≥100%)/不限额(null)",
+  })
+  @IsOptional()
+  @IsIn(["SUFFICIENT", "NEAR_LIMIT", "EXHAUSTED", "UNLIMITED"])
+  quotaStatus?: "SUFFICIENT" | "NEAR_LIMIT" | "EXHAUSTED" | "UNLIMITED"
+
+  @ApiPropertyOptional({ enum: ["USED", "UNUSED"], description: "本月有使用(>0)/未使用(=0)" })
+  @IsOptional()
+  @IsIn(["USED", "UNUSED"])
+  usageStatus?: "USED" | "UNUSED"
+}
+
 /** 添加成员：已存在账号（手机号/邮箱）直接拉入；不存在的手机号则开新账号 */
 export class AddMemberDto {
   @ApiProperty({

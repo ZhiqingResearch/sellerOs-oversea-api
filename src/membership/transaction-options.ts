@@ -141,9 +141,9 @@ export const INVOKE_TYPE_LABEL: Record<InvokeType, string> = {
 /**
  * 单条「扣费行」的扣费来源归类：fromInviter=该行扣的是邀请人的池子；teamId=企业归属（池行）。
  * - TEAM_CONSUME（企业池消费）：按 bucket 归 TEAM_*（混合扣费事件的企业段行同样是 TEAM_CONSUME 逐桶行）。
- * - MANUAL_ADJUST 调减(DEBIT)：企业侧（池调整扣减，仅动 RECHARGE）→ TEAM_RECHARGE；
+ * - MANUAL_ADJUST 调减(DEBIT)：企业侧按 bucket → TEAM_RECHARGE/PACKAGE/GIFT；
  *   个人侧 bucket=RECHARGE → OWN_RECHARGE（如个人充值转入企业池的转出行）；
- *   bucket=GIFT → OWN_GIFT（成员赠送转入企业）；bucket=null → 客服补偿扣回 → OWN_PACKAGE；调增归 null。
+ *   bucket=PACKAGE/GIFT → OWN_PACKAGE/OWN_GIFT；bucket=null → 旧客服补偿合池扣回 → OWN_PACKAGE；调增归 null。
  * - CONSUME：按 (是否邀请人池, bucket) 归个人/邀请人 5 类。
  * 其余类型（充值/赠送/清零/返利等）非扣费行，返回 null。
  */
@@ -156,7 +156,12 @@ export function classifyConsumeSource(
 ): ConsumeSource | null {
   if (type === CreditTxnType.MANUAL_ADJUST) {
     if (direction !== CreditDirection.DEBIT) return null
-    if (teamId != null) return "TEAM_RECHARGE" // 池调整扣减只动 RECHARGE（adjustPoolRecharge）
+    if (teamId != null) {
+      if (bucket === CreditBucket.RECHARGE) return "TEAM_RECHARGE"
+      if (bucket === CreditBucket.PACKAGE) return "TEAM_PACKAGE"
+      if (bucket === CreditBucket.GIFT) return "TEAM_GIFT"
+      return null
+    }
     if (bucket === CreditBucket.GIFT) return "OWN_GIFT"
     return bucket === CreditBucket.RECHARGE ? "OWN_RECHARGE" : "OWN_PACKAGE"
   }
