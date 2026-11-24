@@ -560,7 +560,7 @@ export class PatentQueryService {
   }
   async submitBody(task: Task, kind: Kind): Promise<Bag> {
     const i = input(task.input),
-      body: Bag = { title: reportTitle(i), lang: "zh", clientRequestId: `pq-${task.id}-${kind}` }
+      body: Bag = { title: reportTitle(i), lang: "zh" }
     if (kind === "tm") {
       Object.assign(body, {
         productTitle: [i.tm?.brand, i.tm?.title].filter(Boolean).join(" "),

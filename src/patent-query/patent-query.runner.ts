@@ -4,7 +4,7 @@ import { savedUiLanguage } from "../common/i18n/ai-language"
 import { withUiLanguage } from "../common/i18n/request-language"
 import { Interval } from "@nestjs/schedule"
 import type { PatentQueryCheck } from "@prisma/client"
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { TrohubError, TrohubProvider } from "../common/providers/trohub.provider"
 import { PrismaService } from "../prisma/prisma.service"
 import { imageTarget, inactive, progress } from "./patent-query.report"
@@ -168,10 +168,14 @@ export class PatentQueryRunner implements OnModuleInit {
     let detail: Bag | undefined
     if (!check.upstreamTaskId) {
       let recovering = check.status !== "PENDING"
+      // 旧版已提交的分项没有保存幂等键，恢复时仍须查询当初使用的键。
+      const recoveryId = recovering
+        ? output(check.output).clientRequestId ?? `pq-${task.id}-${kind}`
+        : undefined
       try {
-        if (check.status !== "PENDING") {
+        if (recoveryId) {
           try {
-            detail = await this.provider.detail(kind, `pq-${task.id}-${kind}`)
+            detail = await this.provider.detail(kind, recoveryId)
           } catch (e) {
             if (!(e instanceof TrohubError) || !e.notFound || e.status !== 404) throw e
           }
@@ -182,12 +186,16 @@ export class PatentQueryRunner implements OnModuleInit {
           check = await this.service.mutateCheck(
             check.id,
             out => {
+              out.clientRequestId ??= recoveryId ?? randomUUID()
               if (kind !== "tm")
                 for (const image of input(task.input).images) out.units[image.id] ??= unit()
             },
             { status: "PROCESSING", error: null }
           )
-          detail = await this.provider.submit(kind, body)
+          detail = await this.provider.submit(kind, {
+            ...body,
+            clientRequestId: output(check.output).clientRequestId,
+          })
         }
         const taskID = str(detail.taskID)
         if (!taskID) throw incomplete()

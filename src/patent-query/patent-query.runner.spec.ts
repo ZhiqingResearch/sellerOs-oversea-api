@@ -30,7 +30,7 @@ function setup(kind = "design") {
         return Promise.resolve(check)
       }
     ),
-    submitBody: jest.fn().mockResolvedValue({ clientRequestId: "pq-1-design" }),
+    submitBody: jest.fn().mockResolvedValue({}),
     getTask: jest.fn(() => Promise.resolve(task())),
     settle: jest.fn(),
   }
@@ -102,7 +102,26 @@ describe("专利异步恢复", () => {
       take: 20,
     })
   })
-  it("提交丢回包后用 clientRequestId 恢复，不再 POST", async () => {
+  it("不同环境的同号分项各用独立 UUID，重启补交沿用首次提交的 UUID", async () => {
+    const ids = []
+    for (const s of [setup(), setup()]) {
+      s.set({ upstreamTaskId: null, status: "PENDING" })
+      s.provider.submit.mockRejectedValueOnce(new TrohubError(0, "NETWORK_ERROR"))
+      await s.runner().check(s.task(), s.check())
+      const id = s.provider.submit.mock.calls[0][1].clientRequestId
+      expect(id).toMatch(/^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/i)
+      expect(s.check().output).toMatchObject({ clientRequestId: id })
+      ids.push(id)
+
+      s.provider.detail.mockRejectedValueOnce(new TrohubError(404, "NOT_FOUND"))
+      s.provider.submit.mockResolvedValueOnce({ taskID: "recovered", status: "queued" })
+      await s.runner().check(s.task(), s.check())
+      expect(s.provider.detail).toHaveBeenCalledWith("design", id)
+      expect(s.provider.submit).toHaveBeenNthCalledWith(2, "design", { clientRequestId: id })
+    }
+    expect(ids[0]).not.toBe(ids[1])
+  })
+  it("旧任务提交丢回包后用原 clientRequestId 恢复，不再 POST", async () => {
     const s = setup("tm")
     s.set({ upstreamTaskId: null, status: "PROCESSING" })
     s.provider.detail.mockResolvedValue({

@@ -510,7 +510,6 @@ describe("专利结果授权、收费和写回", () => {
     jest.spyOn(s.service, "imageBytes").mockResolvedValue(Buffer.from("test-image"))
     const body = await s.service.submitBody(s.task(), "tm")
     expect(body).toMatchObject({
-      clientRequestId: "pq-1-tm",
       classCodes: ["021"],
       markTypes: ["text"],
       skipNumbers: true,

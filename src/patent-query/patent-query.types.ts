@@ -26,6 +26,7 @@ export interface Unit {
   complete: boolean
 }
 export interface Output {
+  clientRequestId?: string
   upstreamCompleted?: boolean
   units: Record<string, Unit>
   text?: Bag
