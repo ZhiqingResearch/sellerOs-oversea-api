@@ -1,5 +1,6 @@
 import { recordGenerationSuccess } from "../generation-record/generation-record-success"
 import { beforeQuotaCharge, quotaFailure } from "../common/errors/upstream-quota"
+import { uiText } from "../common/i18n/request-language"
 import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common"
 import { Decimal } from "@prisma/client/runtime/library"
 import { ApifyMediaItem, ApifyProvider } from "../common/providers/apify.provider"
@@ -33,7 +34,12 @@ export class InspirationRadarService {
       where: { userId },
     })
     if (count >= MAX_SUBSCRIPTIONS) {
-      throw new BadRequestException(`订阅数量已达上限（最多 ${MAX_SUBSCRIPTIONS} 个）`)
+      throw new BadRequestException(
+        uiText(
+          `订阅数量已达上限（最多 ${MAX_SUBSCRIPTIONS} 个），请先删除一个已有订阅后再新增。`,
+          `You can create up to ${MAX_SUBSCRIPTIONS} subscriptions. Delete an existing subscription before creating another.`
+        )
+      )
     }
 
     return this.prisma.inspirationSubscription.create({
