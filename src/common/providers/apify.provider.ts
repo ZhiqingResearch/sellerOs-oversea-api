@@ -1,9 +1,9 @@
-import { isQuotaResponse, UpstreamQuotaError } from "../errors/upstream-quota"
 import {
   BadGatewayException,
   Injectable,
   InternalServerErrorException,
   Logger,
+  ServiceUnavailableException,
 } from "@nestjs/common"
 import { ConfigService } from "@nestjs/config"
 import axios from "axios"
@@ -12,6 +12,8 @@ import {
   parseAmazonAuditTarget,
   type AmazonAuditTarget,
 } from "../../audit/audit.marketplace"
+import { isQuotaResponse, UpstreamQuotaError } from "../errors/upstream-quota"
+import { uiText } from "../i18n/request-language"
 import { adaptAmazonAuditResults, adaptAmazonReviewResults } from "./amazon-audit.adapter"
 import type { RawAuditData } from "./crawler.provider"
 
@@ -122,6 +124,8 @@ const AMAZON_RUN_TIMEOUT_SECS = 120
 const AMAZON_HTTP_TIMEOUT_MS = 130_000
 
 interface RunActorOptions {
+  radarPlatform?: "Pinterest" | "Instagram" | "TikTok"
+  maxTotalChargeUsd?: number
   maxRetries?: number
   httpTimeoutMs?: number
   runTimeoutSecs?: number
@@ -161,27 +165,21 @@ export class ApifyProvider {
   }
 
   async searchPinterest(keywords: string[], maxItems: number): Promise<ApifyMediaItem[]> {
-    if (!this.apiToken) {
-      this.logger.warn("[Apify] 未配置 APIFY_API_TOKEN，跳过 Pinterest 抓取")
-      return []
-    }
-
     const input = {
       queries: keywords,
       type: "all-pins",
       limit: Math.ceil(maxItems / keywords.length),
     }
 
-    const raw = await this.runActorSync(PINTEREST_ACTOR, input)
+    // Apify requires at least $1 as the run spending ceiling even for small searches.
+    const raw = await this.runActorSync(PINTEREST_ACTOR, input, {
+      radarPlatform: "Pinterest",
+      maxTotalChargeUsd: 1,
+    })
     return this.parsePinterestResults(raw)
   }
 
   async searchInstagram(keywords: string[], maxItems: number): Promise<ApifyMediaItem[]> {
-    if (!this.apiToken) {
-      this.logger.warn("[Apify] 未配置 APIFY_API_TOKEN，跳过 Instagram 抓取")
-      return []
-    }
-
     const hashtags = keywords
       .filter(k => /^[a-zA-Z0-9\s]+$/.test(k))
       .map(k => k.replace(/\s+/g, "").toLowerCase())
@@ -198,16 +196,11 @@ export class ApifyProvider {
       resultsLimit: Math.ceil(maxItems / uniqueTags.length),
     }
 
-    const raw = await this.runActorSync(INSTAGRAM_ACTOR, input)
+    const raw = await this.runActorSync(INSTAGRAM_ACTOR, input, { radarPlatform: "Instagram" })
     return this.parseInstagramResults(raw)
   }
 
   async searchTikTok(keywords: string[], maxItems: number): Promise<ApifyMediaItem[]> {
-    if (!this.apiToken) {
-      this.logger.warn("[Apify] 未配置 APIFY_API_TOKEN，跳过 TikTok 抓取")
-      return []
-    }
-
     const input = {
       searchQueries: keywords,
       resultsPerPage: Math.ceil(maxItems / keywords.length),
@@ -217,7 +210,7 @@ export class ApifyProvider {
       shouldDownloadSlideshowImages: false,
     }
 
-    const raw = await this.runActorSync(TIKTOK_ACTOR, input)
+    const raw = await this.runActorSync(TIKTOK_ACTOR, input, { radarPlatform: "TikTok" })
     return this.parseTikTokResults(raw)
   }
 
@@ -308,6 +301,15 @@ export class ApifyProvider {
     input: unknown,
     options: RunActorOptions = {}
   ): Promise<unknown[]> {
+    const platform = options.radarPlatform
+    if (platform && !this.apiToken) {
+      throw new ServiceUnavailableException(
+        uiText(
+          `${platform} 数据源尚未配置，请联系管理员。`,
+          `The ${platform} data source is not configured. Please contact support.`
+        )
+      )
+    }
     const amazon = actorId === AMAZON_AUDIT_ACTOR || actorId === AMAZON_REVIEWS_ACTOR
     const url = `${this.baseUrl}/v2/${amazon ? "actors" : "acts"}/${actorId}/run-sync-get-dataset-items`
     const start = Date.now()
@@ -319,6 +321,9 @@ export class ApifyProvider {
           params: {
             ...(!amazon ? { token: this.apiToken } : {}),
             ...(options.runTimeoutSecs !== undefined ? { timeout: options.runTimeoutSecs } : {}),
+            ...(options.maxTotalChargeUsd !== undefined
+              ? { maxTotalChargeUsd: options.maxTotalChargeUsd }
+              : {}),
           },
           headers: {
             "Content-Type": "application/json",
@@ -334,10 +339,13 @@ export class ApifyProvider {
         return items
       } catch (error: unknown) {
         const elapsed = ((Date.now() - start) / 1000).toFixed(1)
-        const quotaInfo = this.describeError(error)
-        if (isQuotaResponse({ status: quotaInfo.status, message: quotaInfo.body }) || isQuotaResponse(quotaInfo.message)) {
-          this.logger.warn(`[Apify] 供方额度耗尽 status=${quotaInfo.status ?? "N/A"} actor=${actorId}`)
-          throw new UpstreamQuotaError("apify", amazon ? 502 : 500)
+        const info = this.describeError(error)
+        if (
+          isQuotaResponse({ status: info.status, message: info.body }) ||
+          isQuotaResponse(info.message)
+        ) {
+          this.logger.warn(`[Apify] 供方额度耗尽 status=${info.status ?? "N/A"} actor=${actorId}`)
+          throw new UpstreamQuotaError("apify", amazon || platform ? 502 : 500)
         }
         if (amazon) {
           // 同步启动断连后不重发；仅记 HTTP 状态，避免响应/异常内的凭证泄漏。
@@ -345,10 +353,39 @@ export class ApifyProvider {
           this.logger.warn(`[Apify] Amazon 兜底失败 status=${status ?? "NETWORK"} 耗时=${elapsed}s`)
           throw new BadGatewayException("备用商品数据源暂不可用")
         }
-        const info = this.describeError(error)
         const retryable = this.isRetryableError(error, info)
 
         if (!retryable || attempt >= maxAttempts) {
+          if (platform) {
+            const type = axios.isAxiosError<{ error?: { type?: string } }>(error)
+              ? error.response?.data?.error?.type
+              : undefined
+            this.logger.error(
+              `[Apify] ${actorId} status=${info.status ?? "NETWORK"} type=${type ?? "unknown"} attempt=${attempt}/${maxAttempts}`
+            )
+            if (type === "max-total-charge-usd-below-minimum") {
+              throw new BadGatewayException(
+                uiText(
+                  `${platform} 数据源的单次抓取预算低于供方最低要求，请联系管理员。`,
+                  `The ${platform} data source's run budget is below the provider minimum. Please contact support.`
+                )
+              )
+            }
+            if (info.status === 401 || info.status === 403) {
+              throw new BadGatewayException(
+                uiText(
+                  `${platform} 数据源拒绝访问，请联系管理员检查抓取权限。`,
+                  `The ${platform} data source denied access. Please contact support.`
+                )
+              )
+            }
+            throw new BadGatewayException(
+              uiText(
+                `暂时无法获取 ${platform} 数据，请稍后重试；若问题持续，请联系管理员。`,
+                `Could not fetch ${platform} data. Please retry later or contact support if the problem persists.`
+              )
+            )
+          }
           this.logger.error(
             `[Apify] ${actorId} 失败 status=${info.status ?? "N/A"} retryable=${retryable} 耗时=${elapsed}s attempt=${attempt}/${maxAttempts}: ${info.message} ${info.body}`
           )

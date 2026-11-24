@@ -225,7 +225,7 @@ Jest + Mock `PrismaService`。通过 `Test.createTestingModule` 配置 `{ provid
   - `GEMINI_API_KEY`（Google 全系 AI）
   - `ACCESS_KEY_ID` / `ACCESS_KEY_SECRET`（阿里云短信；若启用 OSS 同样复用）
   - `XILING_APP_ID` / `XILING_SECRET_KEY`（百度曦灵）
-  - `APIFY_API_TOKEN`（Apify 平台 API Token，灵感雷达模块抓取 Pinterest/Instagram/TikTok 内容；未配置时抓取接口返回空结果）
+  - `APIFY_API_TOKEN`（Apify 平台 API Token，灵感雷达抓取 Pinterest/Instagram/TikTok 内容；未配置时实际抓取返回 503。Pinterest 单次运行的费用上限为供方要求的最低值 1 美元）
   - `API_BASE_URL`：公网可达的服务域名，用于拼曦灵 webhook 回调 URL；本地开发需通过 ngrok / cpolar 类工具转发
 
   - `STRIPE_SECRET_KEY` / `STRIPE_PUBLISHABLE_KEY` / `STRIPE_WEBHOOK_SECRET`（在线支付三渠道；未配置则在线支付不可用，不影响其它功能启动）

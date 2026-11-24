@@ -1,8 +1,14 @@
+import { ConfigService } from "@nestjs/config"
+import type { Prisma } from "@prisma/client"
+import axios from "axios"
 import { withUiLanguage } from "../common/i18n/request-language"
-import type { ApifyProvider } from "../common/providers/apify.provider"
+import { ApifyProvider } from "../common/providers/apify.provider"
 import type { PrismaService } from "../prisma/prisma.service"
 import type { UsageService } from "../usage/usage.service"
 import { InspirationRadarService } from "./inspiration-radar.service"
+
+jest.mock("axios")
+jest.mock("../generation-record/generation-record-success")
 
 describe("InspirationRadarService.create", () => {
   it.each([
@@ -31,4 +37,95 @@ describe("InspirationRadarService.create", () => {
     )
     await expect(result).rejects.toMatchObject({ status: 400, message })
   })
+})
+
+describe("InspirationRadarService.refresh", () => {
+  const http = jest.mocked(axios)
+  beforeEach(() => jest.resetAllMocks())
+
+  function setup(token = "test") {
+    const sub = {
+      id: 71,
+      name: "Garden",
+      keywords: ["garden", "planter"],
+      selectedVariants: {},
+      platforms: ["PINTEREST"],
+      countPerPlatform: { PINTEREST: 20 },
+      lastRefreshedAt: null as Date | null,
+    }
+    const tx = {
+      $queryRaw: jest.fn(),
+      inspirationSubscription: {
+        findUniqueOrThrow: jest.fn().mockResolvedValue(sub),
+        update: ({ data }: { data: { lastRefreshedAt: Date } }) => Object.assign(sub, data),
+      },
+      inspirationItem: {
+        deleteMany: jest.fn(),
+        createMany: jest.fn<void, [{ data: Prisma.InspirationItemCreateManyInput[] }]>(),
+      },
+    }
+    const prisma = {
+      inspirationSubscription: { findFirst: jest.fn().mockResolvedValue(sub) },
+      inspirationItem: {
+        findMany: () => tx.inspirationItem.createMany.mock.lastCall?.[0].data ?? [],
+      },
+      $transaction: jest.fn((callback: (client: typeof tx) => Promise<unknown>) => callback(tx)),
+    }
+    const usage = { deductCustom: jest.fn().mockResolvedValue({ creditsCharged: 1 }) }
+    const service = new InspirationRadarService(
+      prisma as unknown as PrismaService,
+      new ApifyProvider(new ConfigService({ APIFY_API_TOKEN: token, APIFY_MAX_RETRIES: 0 })),
+      usage as unknown as UsageService
+    )
+    return { service, usage, prisma, sub }
+  }
+
+  it("returns the newly fetched Pinterest items on both the first and next refresh", async () => {
+    const { service, usage, sub } = setup()
+    for (const id of ["first", "second"]) {
+      http.post.mockResolvedValueOnce({
+        data: [{ id, media: { images: { original: { url: "https://example.com/pin.jpg" } } } }],
+      })
+      await expect(service.refresh(71, 81)).resolves.toMatchObject([
+        { externalId: id, platform: "PINTEREST" },
+      ])
+      expect(http.post.mock.lastCall).toMatchObject([
+        expect.stringContaining("pinterest-scraper-search"),
+        { queries: ["garden", "planter"], type: "all-pins", limit: 10 },
+        { params: { maxTotalChargeUsd: 1 } },
+      ])
+      expect(sub.lastRefreshedAt).toBeInstanceOf(Date)
+    }
+    expect(usage.deductCustom).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    [
+      "test",
+      400,
+      "max-total-charge-usd-below-minimum",
+      "en-US",
+      502,
+      /Pinterest.*budget.*contact support/i,
+    ],
+    ["test", 403, "invalid-token", "en-US", 502, /Pinterest.*access.*contact support/i],
+    ["test", 503, "unavailable", "zh-CN", 502, /Pinterest.*稍后重试/],
+    ["", 0, "", "en-US", 503, /Pinterest.*configured.*contact support/i],
+  ] as const)(
+    "reports the failed source before replacing results or charging (%s, %s, %s)",
+    async (token, status, type, language, expectedStatus, message) => {
+      const { service, usage, prisma } = setup(token)
+      http.isAxiosError.mockReturnValue(true)
+      http.post.mockRejectedValue({
+        response: { status, data: { error: { type } } },
+        message: "upstream error",
+      })
+      const result = withUiLanguage(language, () => service.refresh(71, 81))
+      await expect(result).rejects.toMatchObject({ status: expectedStatus })
+      await expect(result).rejects.toThrow(message)
+      expect(prisma.$transaction).not.toHaveBeenCalled()
+      expect(usage.deductCustom).not.toHaveBeenCalled()
+      expect(http.post.mock.calls).toHaveLength(token ? 1 : 0)
+    }
+  )
 })
