@@ -36,6 +36,7 @@ export function taskFixture(checks: PatentQueryCheck[] = [], patch: Partial<Task
     input: json(fixtureInput()) as Prisma.JsonObject,
     status: "RUNNING",
     quotedCredits: 40,
+    reportRevision: 1,
     annotations: {},
     error: null,
     finishedAt: null,

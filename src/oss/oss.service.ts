@@ -15,6 +15,7 @@ export class OssService {
   ) {
     this.baseUrl = this.configService.get<string>("OSS_BASE_URL") || ""
     this.client = new OSS({
+      secure: true,
       accessKeyId: this.configService.get<string>("OSS_ACCESS_KEY_ID") || "",
       accessKeySecret: this.configService.get<string>("OSS_ACCESS_KEY_SECRET") || "",
       region: this.configService.get<string>("OSS_REGION"),
@@ -74,6 +75,39 @@ export class OssService {
 
   signedReadUrl(key: string): string {
     return this.client.signatureUrl(key, { expires: 3600 })
+  }
+
+  async putPrivatePdf(key: string, bytes: Buffer, disposition: string) {
+    try {
+      await this.client.put(key, bytes, {
+        mime: "application/pdf",
+        headers: {
+          "x-oss-object-acl": "private",
+          "x-oss-forbid-overwrite": "true",
+          "Content-Disposition": disposition,
+          "Cache-Control": "private, no-store",
+        },
+      })
+    } catch (error) {
+      // A previously interrupted attempt can already have uploaded this same version.
+      if ((error as { code?: string }).code !== "FileAlreadyExists") throw error
+    }
+  }
+
+  async hasPrivatePdf(key: string) {
+    try {
+      await this.client.head(key)
+      return true
+    } catch (error) {
+      if ((error as { status?: number }).status === 404) return false
+      throw error
+    }
+  }
+
+  signPrivatePdf(key: string) {
+    const downloadUrl = this.client.signatureUrl(key, { expires: 600 })
+    const expires = new URL(downloadUrl).searchParams.get("Expires")
+    return { downloadUrl, expiresAt: new Date(Number(expires) * 1000).toISOString() }
   }
 
   generateOSSPolicy() {

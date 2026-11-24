@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   HttpCode,
   Param,
   ParseIntPipe,
@@ -11,6 +12,7 @@ import {
   Query,
   Request,
   Res,
+  StreamableFile,
   UseGuards,
 } from "@nestjs/common"
 import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from "@nestjs/swagger"
@@ -35,6 +37,8 @@ import {
   TaskViewDto,
   TodoDto,
 } from "./dto/patent-query.dto"
+import { PatentQueryExportService } from "./patent-query-export.service"
+import { PatentQueryPdfService } from "./patent-query-pdf.service"
 import { PatentQueryNiceClassService } from "./patent-query.nice-class.service"
 import { PatentQueryService } from "./patent-query.service"
 type UserRequest = { user: { id: number } }
@@ -46,7 +50,9 @@ type UserRequest = { user: { id: number } }
 export class PatentQueryController {
   constructor(
     private readonly service: PatentQueryService,
-    private readonly niceClasses: PatentQueryNiceClassService
+    private readonly niceClasses: PatentQueryNiceClassService,
+    private readonly pdf: PatentQueryPdfService,
+    private readonly exports: PatentQueryExportService
   ) {}
   @Post("quote")
   @HttpCode(200)
@@ -118,6 +124,51 @@ export class PatentQueryController {
   ) {
     void query
     return this.service.overview(req.user.id, id)
+  }
+  @Post("tasks/:id/exports")
+  @ApiOperation({ summary: "Create or reuse a PDF export for the current report version" })
+  async createExport(
+    @Request() req: UserRequest,
+    @Param("id", ParseIntPipe) id: number,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    const job = await this.exports.create(req.user.id, id)
+    res.status(job.status === "QUEUED" || job.status === "PROCESSING" ? 202 : 200)
+    return job
+  }
+  @Get("tasks/:id/exports/:exportId")
+  @Header("Cache-Control", "private, no-store")
+  @ApiOperation({ summary: "Read PDF export status" })
+  exportStatus(
+    @Request() req: UserRequest,
+    @Param("id", ParseIntPipe) id: number,
+    @Param("exportId") exportId: string
+  ) {
+    return this.exports.status(req.user.id, id, exportId)
+  }
+  @Get("tasks/:id/exports/:exportId/download")
+  @Header("Cache-Control", "private, no-store")
+  @ApiOperation({ summary: "Get a fresh 10-minute private PDF download link" })
+  exportDownload(
+    @Request() req: UserRequest,
+    @Param("id", ParseIntPipe) id: number,
+    @Param("exportId") exportId: string
+  ) {
+    return this.exports.download(req.user.id, id, exportId)
+  }
+  @Get("tasks/:id/report.pdf")
+  @Header("Cache-Control", "private, no-store")
+  @ApiOperation({ summary: "下载已结算任务的完整 PDF 报告" })
+  @ApiOkResponse({
+    content: { "application/pdf": { schema: { type: "string", format: "binary" } } },
+  })
+  async downloadPdf(@Request() req: UserRequest, @Param("id", ParseIntPipe) id: number) {
+    const bytes = await this.pdf.export(req.user.id, id)
+    return new StreamableFile(bytes, {
+      type: "application/pdf",
+      disposition: `attachment; filename="patent-report-${id}.pdf"`,
+      length: bytes.length,
+    })
   }
   @Get("tasks/:id/input")
   @ApiOperation({ summary: "按需获取完整原始输入用于编辑或重测" })

@@ -57,6 +57,22 @@ export function documentUrl(value: string): URL {
 
 /** DNS结果校验后绑定实际连接；每次跳转重新解析，签名URL及下载错误不写日志。 */
 export async function downloadAutomotiveDocument(value: string, redirects = 0): Promise<Buffer> {
+  return downloadPublicFile(
+    value,
+    {
+      maxBytes: MAX_LISTING_DOCUMENT_BYTES,
+      timeoutMs: 60_000,
+      accept: "application/pdf,application/octet-stream,*/*",
+    },
+    redirects
+  )
+}
+
+export async function downloadPublicFile(
+  value: string,
+  options: { maxBytes: number; timeoutMs: number; accept: string },
+  redirects = 0
+): Promise<Buffer> {
   const parsed = documentUrl(value)
   const host = parsed.hostname.replace(/^\[|\]$/g, "")
   const addresses = isIP(host)
@@ -76,42 +92,46 @@ export async function downloadAutomotiveDocument(value: string, redirects = 0): 
             ? callback(null, [{ address: target.address, family: target.family }])
             : callback(null, target.address, target.family),
         agent: false,
-        headers: { Accept: "application/pdf,application/octet-stream,*/*" },
+        headers: { Accept: options.accept },
       },
       response => {
         if ([301, 302, 303, 307, 308].includes(response.statusCode ?? 0)) {
           response.resume()
           if (!response.headers.location || redirects >= 3)
             return reject(new BadGatewayException("文档跳转过多或缺少目标地址"))
-          return resolve({ redirect: new URL(response.headers.location, parsed).toString() })
+          try {
+            return resolve({ redirect: new URL(response.headers.location, parsed).toString() })
+          } catch {
+            return reject(new BadGatewayException("文档跳转地址无效"))
+          }
         }
         if ((response.statusCode ?? 500) >= 400 || (response.statusCode ?? 0) < 200) {
           response.resume()
           return reject(new BadGatewayException("文档下载失败，请检查文件地址是否有效"))
         }
-        if (Number(response.headers["content-length"]) > MAX_LISTING_DOCUMENT_BYTES) {
+        if (Number(response.headers["content-length"]) > options.maxBytes) {
           response.destroy()
-          return reject(new BadRequestException("文档不能超过200MB"))
+          return reject(new BadRequestException(`文档不能超过${options.maxBytes / 1024 / 1024}MB`))
         }
         let size = 0
         const chunks: Buffer[] = []
         response.on("data", (chunk: Buffer) => {
           size += chunk.length
-          if (size > MAX_LISTING_DOCUMENT_BYTES) {
+          if (size > options.maxBytes) {
             response.destroy()
-            reject(new BadRequestException("文档不能超过200MB"))
+            reject(new BadRequestException(`文档不能超过${options.maxBytes / 1024 / 1024}MB`))
           } else chunks.push(chunk)
         })
         response.on("end", () => resolve({ body: Buffer.concat(chunks) }))
         response.on("error", () => reject(new BadGatewayException("文档下载连接中断")))
       }
     )
-    const deadline = setTimeout(() => req.destroy(new Error("timeout")), 60_000)
+    const deadline = setTimeout(() => req.destroy(new Error("timeout")), options.timeoutMs)
     req.on("close", () => clearTimeout(deadline))
     req.on("error", () => reject(new BadGatewayException("文档下载失败或超时")))
     req.end()
   })
   return outcome.redirect
-    ? downloadAutomotiveDocument(outcome.redirect, redirects + 1)
+    ? downloadPublicFile(outcome.redirect, options, redirects + 1)
     : outcome.body!
 }

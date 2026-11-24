@@ -686,8 +686,12 @@ export class PatentQueryService {
       assertPaid(latest)
       const key = await decisionTarget(tx, id, dto.kind, dto.targetId, dto.imageId)
       const a = annotations(latest.annotations)
+      const changed = (a.decisions[key]?.value ?? "none") !== dto.value
       a.decisions[key] = { value: dto.value }
-      await tx.patentQueryTask.update({ where: { id }, data: { annotations: json(a) } })
+      await tx.patentQueryTask.update({
+        where: { id },
+        data: { annotations: json(a), ...(changed && { reportRevision: { increment: 1 } }) },
+      })
       return {
         taskId: id,
         changed: {
@@ -714,8 +718,12 @@ export class PatentQueryService {
       if (!light.report.todos.some(t => t.id === todoId))
         throw new BadRequestException("待办不存在")
       const a = annotations(light.task.annotations)
+      const changed = (a.todoDone[todoId] === true) !== done
       a.todoDone[todoId] = done
-      await tx.patentQueryTask.update({ where: { id }, data: { annotations: json(a) } })
+      await tx.patentQueryTask.update({
+        where: { id },
+        data: { annotations: json(a), ...(changed && { reportRevision: { increment: 1 } }) },
+      })
       return { taskId: id, todoId, done, refresh: ["overview", "todos"] }
     })
   }

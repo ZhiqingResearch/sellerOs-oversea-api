@@ -271,6 +271,7 @@ export class PatentQueryRunner implements OnModuleInit {
               check.id,
               out => {
                 out.text = text
+                out.savedWordMarkCounts = rows(text.words).map(w => rows(w.marks).length)
               },
               { status: "COMPLETED", error: null }
             )
@@ -415,6 +416,7 @@ export class PatentQueryRunner implements OnModuleInit {
             m.score > 0.6
         )
       )
+      u.savedMatchCount = u.matches.length
       u.offset = offset
       u.complete = !page.hasNextPage
       if (u.complete) delete u.pageFingerprints

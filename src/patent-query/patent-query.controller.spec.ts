@@ -10,6 +10,8 @@ import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard"
 import { PermissionsGuard } from "../auth/guards/permissions.guard"
 import { PermissionCacheService } from "../auth/services/permission-cache.service"
 import { AiGatewayProvider } from "../common/providers/ai-gateway.provider"
+import { PatentQueryExportService } from "./patent-query-export.service"
+import { PatentQueryPdfService } from "./patent-query-pdf.service"
 import { PatentQueryController } from "./patent-query.controller"
 import { PatentQueryNiceClassService } from "./patent-query.nice-class.service"
 import { PatentQueryService } from "./patent-query.service"
@@ -31,6 +33,8 @@ describe("专利 HTTP 契约", () => {
     todo: jest.fn().mockReturnValue({ done: true, refresh: ["overview", "todos"] }),
     refreshImages: jest.fn().mockReturnValue({ refresh: ["results"] }),
   }
+  const exports = { create: jest.fn(), status: jest.fn(), download: jest.fn() }
+  const pdf = { export: jest.fn().mockResolvedValue(Buffer.from("%PDF-sample")) }
   const permission = {
     getForUser: jest.fn().mockResolvedValue(new Set(["tool.patent_query"])),
     getLabelMap: jest.fn().mockResolvedValue(new Map([["tool.patent_query", "产品专利查询"]])),
@@ -46,6 +50,8 @@ describe("专利 HTTP 契约", () => {
       controllers: [PatentQueryController],
       providers: [
         { provide: PatentQueryService, useValue: service },
+        { provide: PatentQueryExportService, useValue: exports },
+        { provide: PatentQueryPdfService, useValue: pdf },
         PatentQueryNiceClassService,
         { provide: AiGatewayProvider, useValue: gateway },
         PermissionsGuard,
@@ -74,6 +80,54 @@ describe("专利 HTTP 契约", () => {
   afterAll(async () => {
     await app.close()
   })
+  it("下载本人报告作为 PDF 附件，未授权请求不能启动导出", async () => {
+    const path = "/api/patent-query/tasks/3/report.pdf"
+    await request(app.getHttpServer()).get(path).expect(401)
+    permission.getForUser.mockResolvedValueOnce(new Set())
+    await request(app.getHttpServer())
+      .get(path)
+      .set("Authorization", "Bearer test-token")
+      .expect(403)
+    expect(pdf.export).not.toHaveBeenCalled()
+    const res = await request(app.getHttpServer())
+      .get(path)
+      .set("Authorization", "Bearer test-token")
+      .expect(200)
+      .expect("Content-Type", "application/pdf")
+      .expect("Content-Disposition", 'attachment; filename="patent-report-3.pdf"')
+    expect(res.body).toEqual(Buffer.from("%PDF-sample"))
+    expect(pdf.export).toHaveBeenCalledWith(1, 3)
+  })
+  it("创建和复用异步导出，共享同一状态协议，下载签名不缓存", async () => {
+    const path = "/api/patent-query/tasks/3/exports",
+      token = "Bearer test-token"
+    const queued = { exportId: "fixture", reportVersion: "opaque", status: "QUEUED" }
+    const ready = { ...queued, status: "READY" }
+    exports.create.mockResolvedValueOnce(queued).mockResolvedValueOnce(ready)
+    await request(app.getHttpServer()).post(path).expect(401)
+    await request(app.getHttpServer()).post(path).set("Authorization", token).expect(202, queued)
+    await request(app.getHttpServer()).post(path).set("Authorization", token).expect(200, ready)
+    exports.status.mockResolvedValue(ready)
+    await request(app.getHttpServer())
+      .get(path + "/fixture")
+      .set("Authorization", token)
+      .expect(200, ready)
+    const signed = {
+      downloadUrl: "https://example.invalid/file",
+      expiresAt: "2026-11-24T10:00:00Z",
+      filename: "中文.pdf",
+    }
+    exports.download.mockResolvedValue(signed)
+    await request(app.getHttpServer())
+      .get(path + "/fixture/download")
+      .set("Authorization", token)
+      .expect(200, signed)
+      .expect("Cache-Control", /no-store/)
+    expect(exports.create).toHaveBeenCalledWith(1, 3)
+    expect(exports.status).toHaveBeenCalledWith(1, 3, "fixture")
+    expect(exports.download).toHaveBeenCalledWith(1, 3, "fixture")
+  })
+
   it("JWT 和功能权限先于服务调用", async () => {
     await request(app.getHttpServer())
       .post("/api/patent-query/quote")

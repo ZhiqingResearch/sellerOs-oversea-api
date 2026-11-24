@@ -1,6 +1,7 @@
 import { ConflictException } from "@nestjs/common"
 import type { PatentQueryCheck, Prisma } from "@prisma/client"
 import { isDeepStrictEqual } from "node:util"
+import { ExportConflict } from "./patent-query-export.contract"
 import { Bag, Output, Task, json, obj, output, rows, str } from "./patent-query.types"
 
 type Db = Pick<
@@ -47,14 +48,19 @@ export function splitResults(value: unknown) {
   return { data, results }
 }
 
-export function hydrateOutput(value: unknown, results: StoredResult[]): Output {
+export function hydrateOutput(value: unknown, results: StoredResult[], verify = false): Output {
   const data = structuredClone(output(value))
   const grouped = new Map<string | null, Bag[]>()
-  for (const row of [...results].sort((a, b) => a.position - b.position)) {
+  const ordered = [...results].sort((a, b) => a.position - b.position)
+  if (verify && ordered.some((row, index) => row.position !== index))
+    throw new ExportConflict("REPORT_DATA_INCOMPLETE")
+  for (const row of ordered) {
     const group = grouped.get(row.imageId) ?? []
     const value = structuredClone(obj(row.data))
+    if (verify && !Object.keys(value).length) throw new ExportConflict("REPORT_DATA_INCOMPLETE")
     if (row.imageId === null) {
       if ("marks" in value) throw new ConflictException("不支持旧版报告数据，请清理测试记录")
+      if (verify && !str(value.term)) throw new ExportConflict("REPORT_DATA_INCOMPLETE")
       value.marks = row.marks ?? []
     }
     group.push(value)
@@ -69,12 +75,29 @@ export function hydrateOutput(value: unknown, results: StoredResult[]): Output {
   for (const [imageId, unit] of Object.entries(data.units))
     unit.matches = grouped.get(imageId) ?? []
   if (data.text) data.text.words = grouped.get(null) ?? []
+  if (verify) {
+    const words = rows(data.text?.words)
+    if (
+      [...grouped.keys()].some(id => (id === null ? !data.text : !data.units[id])) ||
+      Object.values(data.units).some(
+        unit => unit.savedMatchCount !== undefined && unit.matches.length !== unit.savedMatchCount
+      ) ||
+      (data.savedWordMarkCounts &&
+        (words.length !== data.savedWordMarkCounts.length ||
+          data.savedWordMarkCounts.some((count, n) => rows(words[n]?.marks).length !== count)))
+    )
+      throw new ExportConflict("REPORT_DATA_INCOMPLETE")
+  }
   delete data.cache
   return data
 }
 
 // 仅从当前商标子表批量加载，在应用内排序。
-export async function hydrateResults<T extends StoredResult & { id: number }>(db: Db, stored: T[]) {
+export async function hydrateResults<T extends StoredResult & { id: number }>(
+  db: Db,
+  stored: T[],
+  verify = false
+) {
   const ids = stored.filter(r => r.imageId === null).map(r => r.id)
   const needed = new Set(ids)
   const marks = ids.length
@@ -86,17 +109,25 @@ export async function hydrateResults<T extends StoredResult & { id: number }>(db
     group.push(mark)
     grouped.set(mark.resultId, group)
   }
+  for (const group of grouped.values()) {
+    group.sort((a, b) => a.position - b.position)
+    if (
+      verify &&
+      group.some((mark, n) => mark.position !== n || !Object.keys(obj(mark.data)).length)
+    )
+      throw new ExportConflict("REPORT_DATA_INCOMPLETE")
+  }
   return stored.map(r => ({
     ...r,
     ...(needed.has(r.id)
       ? {
-          marks: (grouped.get(r.id) ?? []).sort((a, b) => a.position - b.position).map(m => m.data),
+          marks: (grouped.get(r.id) ?? []).map(m => m.data),
         }
       : {}),
   }))
 }
 
-export async function hydrateChecks(db: Db, checks: PatentQueryCheck[]) {
+export async function hydrateChecks(db: Db, checks: PatentQueryCheck[], verify = false) {
   const ids = checks.map(c => c.id)
   if (!ids.length) return checks
   const stored = await db.patentQueryResult.findMany({
@@ -104,18 +135,22 @@ export async function hydrateChecks(db: Db, checks: PatentQueryCheck[]) {
     // hydrateOutput 已按分项排序，避免 MySQL 对大 JSON 明细执行全局 filesort。
   })
   const grouped = new Map<number, StoredResult[]>()
-  for (const row of await hydrateResults(db, stored)) {
+  for (const row of await hydrateResults(db, stored, verify)) {
     const group = grouped.get(row.checkId) ?? []
     group.push(row)
     grouped.set(row.checkId, group)
   }
-  return checks.map(c => ({ ...c, output: json(hydrateOutput(c.output, grouped.get(c.id) ?? [])) }))
+  return checks.map(c => ({
+    ...c,
+    output: json(hydrateOutput(c.output, grouped.get(c.id) ?? [], verify)),
+  }))
 }
 
-export async function hydrateTasks(db: Db, tasks: Task[]): Promise<Task[]> {
+export async function hydrateTasks(db: Db, tasks: Task[], verify = false): Promise<Task[]> {
   const checks = await hydrateChecks(
     db,
-    tasks.flatMap(t => t.checks)
+    tasks.flatMap(t => t.checks),
+    verify
   )
   const byId = new Map(checks.map(c => [c.id, c]))
   return tasks.map(t => ({

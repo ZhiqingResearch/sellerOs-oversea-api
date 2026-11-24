@@ -16,6 +16,7 @@ export type Input = QuotePatentQueryDto & {
   resolved: { responseLanguage?: "zh-CN" | "en-US"; designCountries: string[]; classCodes: string[]; skipped: string[] }
 }
 export interface Unit {
+  savedMatchCount?: number
   resultReady?: boolean
   status: string
   error: string | null
@@ -26,6 +27,7 @@ export interface Unit {
   complete: boolean
 }
 export interface Output {
+  savedWordMarkCounts?: number[]
   clientRequestId?: string
   upstreamCompleted?: boolean
   units: Record<string, Unit>

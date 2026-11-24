@@ -3773,11 +3773,36 @@ model PatentQueryTask {
   finishedAt    DateTime?
   createdAt     DateTime           @default(now())
   deletedAt     DateTime?
+  reportRevision Int             @default(1)
+  exports       PatentQueryExport[]
   checks        PatentQueryCheck[]
 
   @@unique([userId, requestId])
   @@index([userId, deletedAt, createdAt])
   @@index([status])
+}
+
+enum PatentExportStatus {
+  QUEUED
+  PROCESSING
+  READY
+  FAILED
+}
+
+model PatentQueryExport {
+  id            String             @id @default(uuid()) @db.Char(36)
+  taskId        Int                @db.UnsignedInt
+  reportVersion String             @db.VarChar(64)
+  status        PatentExportStatus @default(QUEUED)
+  attempt       Int                @default(0)
+  errorCode     String?            @db.VarChar(64)
+  filename      String             @db.VarChar(255)
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  task          PatentQueryTask    @relation(fields: [taskId], references: [id])
+
+  @@unique([taskId, reportVersion])
+  @@index([status, updatedAt])
 }
 
 model PatentQueryCheck {
