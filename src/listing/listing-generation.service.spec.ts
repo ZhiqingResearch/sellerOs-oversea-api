@@ -224,14 +224,16 @@ describe("Listing 后台任务与主生成结算", () => {
     expect(f.gateway.streamChat).not.toHaveBeenCalled()
   })
   it.each([
-    { isUnavailable: false, hasMissingLimits: false, responseLanguage: "zh-CN" },
-    { isUnavailable: false, hasMissingLimits: false, responseLanguage: "en-US" },
-    { isUnavailable: true, hasMissingLimits: false, responseLanguage: "zh-CN" },
-    { isUnavailable: true, hasMissingLimits: true, responseLanguage: "zh-CN" },
-  ])("新版CDQ自动评分按任务语言恢复，支持未获取和空满分 %j", async ({ isUnavailable, hasMissingLimits, responseLanguage }) => {
+    { planIndex: 0, isUnavailable: false, hasMissingLimits: false, responseLanguage: "zh-CN" },
+    { planIndex: 0, isUnavailable: false, hasMissingLimits: false, responseLanguage: "en-US" },
+    { planIndex: 1, isUnavailable: false, hasMissingLimits: false, responseLanguage: "en-US" },
+    { planIndex: 0, isUnavailable: true, hasMissingLimits: false, responseLanguage: "zh-CN" },
+    { planIndex: 0, isUnavailable: true, hasMissingLimits: true, responseLanguage: "zh-CN" },
+  ])("新版CDQ自动评分按任务语言恢复，支持未获取和空满分 %j", async ({ planIndex, isUnavailable, hasMissingLimits, responseLanguage }) => {
     const f = fixture()
     const score = {
-      scoreVersion: "cdq-2026-09-16", total: isUnavailable ? null : 100, potential: "评分结果", suggestions: ["建议补充证据"],
+      scoreVersion: "cdq-2026-09-16", total: isUnavailable ? null : 100, potential: "评分结果",
+      suggestions: ["CDQ权重为内部整理口径，不是Amazon官方评分算法。"],
       dimensions: [[30, 25, 20, 15, 5, 5], [7, 7, 5, 4, 2], [10, 6, 4], [7, 5, 3]].map((limits, index) => ({
         name: ["CDQ完整性", "关键词覆盖", "COSMO", "Alexa"][index],
         maxScore: [40, 25, 20, 15][index], weight: [40, 25, 20, 15][index], score: [40, 25, 20, 15][index],
@@ -240,19 +242,27 @@ describe("Listing 后台任务与主生成结算", () => {
           score: index === 0 && isUnavailable ? null : maxScore,
           maxScore: index === 0 && hasMissingLimits ? null : maxScore,
           status: index === 0 && isUnavailable ? "UNAVAILABLE" : "VERIFIED", description: "取证状态说明", deductions: [],
+          ...(index === 0 && { source: "官方" }),
         })),
       })),
     }
     f.prisma.listingAiStep.findUniqueOrThrow.mockResolvedValue({ id: 9, outputText: JSON.stringify(score) })
-    const task = { ...f.task, status: "SCORE_READY", input: { context: { params: { market: "amazon_us" } }, result: JSON.parse(body), autoScoreStepId: 9, responseLanguage }, billing: { ...f.task.billing, score: f.task.billing, isScoreComplete: true } } as unknown as ListingGenerationTask
+    const task = { ...f.task, planIndex, status: "SCORE_READY", input: { context: { params: { market: "amazon_us" } }, result: JSON.parse(body), autoScoreStepId: 9, responseLanguage }, billing: { ...f.task.billing, score: f.task.billing, isScoreComplete: true } } as unknown as ListingGenerationTask
     await f.service.finalizeScore(task)
-    expect(f.runs.update.mock.calls[0][2]).toMatchObject({ status: "COMPLETED", data: { plans: [{ score: isUnavailable ? null : 100, scoreResult: { scoreVersion: "cdq-2026-09-16" } }] } })
+    expect(f.runs.update.mock.calls[0][2]).toMatchObject({
+      planIndex, status: "COMPLETED",
+      data: { plans: [{ result: JSON.parse(body), score: isUnavailable ? null : 100, scoreResult: { scoreVersion: "cdq-2026-09-16" } }] },
+    })
     expect(f.ai.chargeSavedOutput).toHaveBeenCalledTimes(isUnavailable ? 0 : 1)
     expect(f.gateway.streamChat).not.toHaveBeenCalled()
     if (responseLanguage === "en-US") {
       expect(f.runs.update.mock.calls[0][2]).toMatchObject({ data: { plans: [{ scoreResult: {
         potential: "S · Ready to publish",
-        dimensions: expect.arrayContaining([expect.objectContaining({ name: "CDQ completeness", subtitle: "Final score · Excellent" })]),
+        suggestions: ["CDQ weights follow an internal scoring methodology independent of Amazon's official scoring."],
+        dimensions: expect.arrayContaining([expect.objectContaining({
+          name: "CDQ completeness", subtitle: "Final score · Excellent",
+          criteria: expect.arrayContaining([expect.objectContaining({ name: "Structured attributes", source: "Official" })]),
+        })]),
       } }] } })
     }
     if (hasMissingLimits) {

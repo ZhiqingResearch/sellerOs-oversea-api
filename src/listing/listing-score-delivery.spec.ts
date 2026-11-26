@@ -4,6 +4,7 @@ import { Test } from "@nestjs/testing"
 import { BusinessAiRun, Prisma } from "@prisma/client"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
+import { withUiLanguage } from "../common/i18n/request-language"
 import { AiGatewayProvider } from "../common/providers/ai-gateway.provider"
 import { PrismaService } from "../prisma/prisma.service"
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard"
@@ -26,6 +27,35 @@ interface IncidentFixture {
   primary: string
 }
 interface SavedBilling { repairs?: Array<{ outputText: string }>; resultText?: string }
+
+it("独立评分交付及重读按英文处理固定文案，原始模型记录和扣分明细保留", async () => {
+  const incident = loadIncident(28)
+  const raw = JSON.parse(incident.primary)
+  const evidence = "包装印有「降噪」"
+  raw.dimensions[0].criteria[0].source = "官方"
+  raw.dimensions[3].score = 14
+  Object.assign(raw.dimensions[3].criteria[1], {
+    score: 4,
+    deductions: [{ ruleId: "alexa.bulletData", points: 1, reason: "Score = 5 ×合格条数 / N", evidence }],
+  })
+  incident.primary = JSON.stringify(raw)
+  const f = createFixture(incident)
+  f.dto.userPrompt = "Score the provided listing."
+
+  await withUiLanguage("en-US", async () => {
+    const result = await f.service.complete(3, f.dto)
+    const report = JSON.parse(result.text)
+    expect(report.dimensions[0].criteria[0].source).toBe("Official")
+    expect(report.dimensions[3].criteria[1]).toMatchObject({
+      score: 4,
+      deductions: [{ points: 1, reason: "Score = 5 × qualifying bullets / N", evidence }],
+    })
+    expect(await f.service.read(3, f.dto.scoreRequestId)).toMatchObject({ text: result.text })
+  })
+  expect(f.row().outputText).toBe(incident.primary)
+  expect(f.streamChat).toHaveBeenCalledTimes(1)
+  expect(f.chargeSavedOutput).toHaveBeenCalledTimes(1)
+})
 
 it("推荐属性未填误扣6分时直接按规则计分并完成，不增加AI调用或报错拦截", async () => {
   const incident = loadIncident(28)

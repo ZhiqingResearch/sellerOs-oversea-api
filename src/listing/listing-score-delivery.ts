@@ -2,7 +2,7 @@ import { Logger } from "@nestjs/common"
 import { uiLanguage } from "../common/i18n/request-language"
 import { isJsonObject } from "../common/utils/canonical-json"
 import { parseListingJsonObject } from "./listing-result-parser"
-import { CDQ_CRITERION_NAMES_EN, CDQ_DIMENSION_NAMES_EN } from "./listing-cdq-labels"
+import { CDQ_CRITERION_NAMES_EN, CDQ_DIMENSION_NAMES_EN, CDQ_WEIGHT_NOTE_EN } from "./listing-cdq-labels"
 import { CDQ_SCORE_VERSION } from "./listing-cdq-score"
 import { formatCdqSubtitle, recalculateCdqScoreSummary } from "./listing-cdq-summary"
 import { recalculateListingAlexaScore } from "./listing-alexa-score"
@@ -11,6 +11,24 @@ import { validateListingReportRules, type ListingRuleContext } from "./listing-s
 import { recalculateListingAttributeScore } from "./listing-attribute-normalization"
 import { normalizeListingScoreArithmetic, normalizeListingScoreStructure } from "./listing-score-normalization"
 import { reconcileListingDescriptionScore } from "./listing-description-score"
+
+const SCORE_SOURCE_LABELS_EN = new Map([
+  ["官方", "Official"],
+  ["行业研究", "Industry research"],
+  ["操作建议", "Practical guidance"],
+])
+const CDQ_WEIGHT_NOTE_ZH =
+  /^(?:(?:说明|注|优化)\s*[：:]\s*)?CDQ\s*权重为内部整理口径[，,]\s*不是\s*Amazon\s*官方评分算法[。.]?$/i
+const QUOTE_OR_BULLET_FORMULA =
+  /"[^"\n]*"|“[^”\n]*”|‘[^’\n]*’|「[^」\n]*」|『[^』\n]*』|(?<!\w)'[^'\n]+'(?!\w)|\x60[^\x60\n]*\x60|\b5\s*[×*]\s*合格条数\s*[/÷]\s*(N\b|6\b|实际条数)/g
+
+function localizeBulletFormula(text: string, sourceText?: string): string {
+  return text.replace(QUOTE_OR_BULLET_FORMULA, (match, denominator: string | undefined) =>
+    denominator && !sourceText?.includes(match)
+      ? `5 × qualifying bullets / ${denominator === "实际条数" ? "actual bullet count" : denominator}`
+      : match
+  )
+}
 
 /** 只检查能否展示；算术、证据、规则差异都不能把已有完整报告变成错误页。 */
 export function prepareListingScoreDelivery(
@@ -48,13 +66,31 @@ export function prepareListingScoreDelivery(
   report = normalizeListingScoreArithmetic(report)
   report = recalculateCdqScoreSummary(report)
   if (uiLanguage() === "en-US" && report.scoreVersion === CDQ_SCORE_VERSION) {
-    const dimensions = report.dimensions as Array<{ name: string; criteria: Array<{ name: string }>; cdq?: unknown; subtitle?: string }>
+    const sourceText = context?.sourceFacts ? JSON.stringify(context.sourceFacts) : undefined
+    const dimensions = report.dimensions as Array<{
+      name: string
+      criteria: Array<{ name: string; source?: unknown; description?: unknown; deductions: Array<{ reason: string }> }>
+      cdq?: unknown
+      subtitle?: string
+    }>
     dimensions.forEach((dimension, index) => {
       dimension.name = CDQ_DIMENSION_NAMES_EN[index]
       dimension.criteria.forEach((criterion, criterionIndex) => {
         criterion.name = CDQ_CRITERION_NAMES_EN[index][criterionIndex]
+        if (typeof criterion.source === "string")
+          criterion.source = SCORE_SOURCE_LABELS_EN.get(criterion.source.trim()) ?? criterion.source
       })
     })
+    const bullet = dimensions[3].criteria[1]
+    if (typeof bullet.description === "string")
+      bullet.description = localizeBulletFormula(bullet.description, sourceText)
+    for (const deduction of bullet.deductions)
+      deduction.reason = localizeBulletFormula(deduction.reason, sourceText)
+    report.suggestions = (report.suggestions as string[]).map(suggestion =>
+      CDQ_WEIGHT_NOTE_ZH.test(suggestion.trim()) && !sourceText?.includes(suggestion.trim())
+        ? CDQ_WEIGHT_NOTE_EN
+        : suggestion
+    )
     const [dimension] = dimensions
     const cdq = dimension.cdq
     if (isJsonObject(cdq) && typeof cdq.effectiveMax === "number" && typeof cdq.applicableMax === "number" &&

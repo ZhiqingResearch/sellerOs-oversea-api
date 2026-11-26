@@ -13,3 +13,6 @@ export const CDQ_CRITERION_NAMES_EN: readonly (readonly string[])[] = [
   ["Coverage of all four high-priority relationships", "Category-specific relationships", "Coverage of at least three medium-priority relationships"],
   ["Title coherence", "Verifiable facts in each bullet", "Concrete use cases and structured specifications in the description"],
 ]
+
+export const CDQ_WEIGHT_NOTE_EN =
+  "CDQ weights follow an internal scoring methodology independent of Amazon's official scoring."

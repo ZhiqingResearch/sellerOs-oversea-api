@@ -1,6 +1,6 @@
 import { uiLanguage } from "../common/i18n/request-language"
 import { buildListingAlexaPrompt } from "./listing-alexa-score"
-import { CDQ_DIMENSION_NAMES_EN } from "./listing-cdq-labels"
+import { CDQ_DIMENSION_NAMES_EN, CDQ_WEIGHT_NOTE_EN } from "./listing-cdq-labels"
 import { LISTING_SCORE_OUTPUT_DELIVERY_PROMPT } from "./listing-score-delivery"
 import { buildListingEvidencePrompt } from "./listing-score-evidence-flow"
 import { parseListingScoreSource } from "./listing-score-evidence"
@@ -11,7 +11,9 @@ import { LISTING_SCORE_CONSISTENCY_PROMPT } from "./listing-score-validation"
 export function buildListingScoreSystemPrompt(systemPrompt: string | undefined, userPrompt: string): string {
   const source = parseListingScoreSource(userPrompt)
   const englishInstructions = uiLanguage() === "en-US"
-    ? `\nUse English for all scoring labels, descriptions, deduction reasons, suggestions and summaries, including when rules give examples in Chinese. Preserve source quotations as written. For CDQ, use these dimension names in order: ${CDQ_DIMENSION_NAMES_EN.join(", ")}. Use "Search terms unavailable" for the unavailable search terms description.\n`
+    ? `\nUse English for all scoring labels, descriptions, deduction reasons, suggestions and summaries, including when rules give examples in Chinese. Preserve source quotations as written. For CDQ, use these dimension names in order: ${CDQ_DIMENSION_NAMES_EN.join(", ")}. Use "Search terms unavailable" for the unavailable search terms description.
+Use "Official", "Industry research", or "Practical guidance" for the scoring source labels and "${CDQ_WEIGHT_NOTE_EN}" for the CDQ weight note.
+If explaining the Alexa bullet formula, write "5 × qualifying bullets / N" for standard mode or "min(5, 5 × qualifying bullets / 6)" for custom mode. Do not copy the Chinese formula wording into scoring explanations.\n`
     : ""
   return (systemPrompt ?? "") + LISTING_SCORE_CONSISTENCY_PROMPT + LISTING_RULE_CHECK_PROMPT +
     buildListingEvidencePrompt(source) + LISTING_SCORE_OUTPUT_DELIVERY_PROMPT + buildListingAlexaPrompt(source) +

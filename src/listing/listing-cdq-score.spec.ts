@@ -84,6 +84,49 @@ describe("新版 CDQ 取证与折算", () => {
       .toContain("Use English for all scoring labels, descriptions, deduction reasons")
   })
 
+  it("英文交付只替换固定来源、CDQ说明和Alexa公式，保留同句引文与分值", () => {
+    const report = createReport()
+    const formula = "5 ×合格条数 / N"
+    const quoted = `产品包装标记 ${formula}`
+    const reason = `Scored as ${formula}. Label reads “${quoted}”.`
+    const note = "说明：CDQ权重为内部整理口径，不是Amazon官方评分算法。"
+    report.suggestions.push(note, `Keep the original label “${quoted}”.`)
+    Object.assign(report.dimensions[0].criteria[0], { source: "官方" })
+    Object.assign(report.dimensions[1].criteria[0], { source: "操作建议" })
+    Object.assign(report.dimensions[3].criteria[1], {
+      source: "行业研究", score: 4, description: `Score = ${formula}; custom: min(5, 5×合格条数/6)`,
+      deductions: [{ ruleId: "alexa.bulletData", reason, points: 1, evidence: quoted }],
+      assessment: { quote: quoted },
+    })
+    report.dimensions[3].score = 14
+    report.total = 99
+    const deliver = (language: "en-US" | "zh-CN") =>
+      JSON.parse(withUiLanguage(language, () => prepareListingScoreDelivery(JSON.stringify(report), "amazon_us"))!)
+    const english = deliver("en-US")
+    const chinese = deliver("zh-CN")
+
+    expect(english.total).toBe(chinese.total)
+    expect(english.total).toBe(99)
+    expect(english.dimensions[3].score).toBe(14)
+    expect(english.dimensions[0].criteria[0].source).toBe("Official")
+    expect(english.dimensions[1].criteria[0].source).toBe("Practical guidance")
+    expect(english.dimensions[3].criteria[1]).toMatchObject({
+      score: 4, source: "Industry research",
+      description: "Score = 5 × qualifying bullets / N; custom: min(5, 5 × qualifying bullets / 6)",
+      deductions: [{
+        ruleId: "alexa.bulletData", reason: `Scored as 5 × qualifying bullets / N. Label reads “${quoted}”.`,
+        points: 1, evidence: quoted,
+      }],
+      assessment: { quote: quoted },
+    })
+    expect(english.suggestions.slice(1)).toEqual([
+      "CDQ weights follow an internal scoring methodology independent of Amazon's official scoring.",
+      `Keep the original label “${quoted}”.`,
+    ])
+    expect(chinese.dimensions[3].criteria[1].deductions[0].reason).toBe(reason)
+    expect(chinese.suggestions[1]).toBe(note)
+  })
+
   it("实跑负分只复核异常项，图片扣分保留并统一已取证状态", () => {
     const text = readFileSync(join(__dirname, "fixtures/listing-score-cdq-20260916.json"), "utf8")
     const plan = buildScoreCorrectionPlan(text, "amazon_us")!
