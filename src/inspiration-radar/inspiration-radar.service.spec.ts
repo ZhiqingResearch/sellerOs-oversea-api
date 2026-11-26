@@ -1,11 +1,14 @@
 import { ConfigService } from "@nestjs/config"
 import type { Prisma } from "@prisma/client"
 import axios from "axios"
+import sharp from "sharp"
 import { withUiLanguage } from "../common/i18n/request-language"
 import { ApifyProvider } from "../common/providers/apify.provider"
 import type { PrismaService } from "../prisma/prisma.service"
+import type { SpacesService } from "../spaces/spaces.service"
 import type { UsageService } from "../usage/usage.service"
 import { InspirationRadarService } from "./inspiration-radar.service"
+import { TikTokCoverService } from "./tiktok-cover.service"
 
 jest.mock("axios")
 jest.mock("../generation-record/generation-record-success")
@@ -22,7 +25,8 @@ describe("InspirationRadarService.create", () => {
     const service = new InspirationRadarService(
       prisma as unknown as PrismaService,
       {} as ApifyProvider,
-      {} as UsageService
+      {} as UsageService,
+      {} as TikTokCoverService
     )
     const result = withUiLanguage(language, () =>
       service.create(
@@ -72,12 +76,16 @@ describe("InspirationRadarService.refresh", () => {
       $transaction: jest.fn((callback: (client: typeof tx) => Promise<unknown>) => callback(tx)),
     }
     const usage = { deductCustom: jest.fn().mockResolvedValue({ creditsCharged: 1 }) }
-    const service = new InspirationRadarService(
-      prisma as unknown as PrismaService,
-      new ApifyProvider(new ConfigService({ APIFY_API_TOKEN: token, APIFY_MAX_RETRIES: 0 })),
-      usage as unknown as UsageService
+    const db = prisma as unknown as PrismaService
+    const apify = new ApifyProvider(
+      new ConfigService({ APIFY_API_TOKEN: token, APIFY_MAX_RETRIES: 0 })
     )
-    return { service, usage, prisma, sub }
+    const spaces = {
+      uploadBuffer: jest.fn(async (_buffer: Buffer, key: string) => `https://files.example/${key}`),
+    }
+    const covers = new TikTokCoverService(db, apify, spaces as unknown as SpacesService)
+    const service = new InspirationRadarService(db, apify, usage as unknown as UsageService, covers)
+    return { service, usage, prisma, sub, spaces }
   }
 
   it("returns the newly fetched Pinterest items on both the first and next refresh", async () => {
@@ -97,6 +105,51 @@ describe("InspirationRadarService.refresh", () => {
       expect(sub.lastRefreshedAt).toBeInstanceOf(Date)
     }
     expect(usage.deductCustom).toHaveBeenCalledTimes(2)
+  })
+
+  it("stores a TikTok cover before returning refresh results and keeps the original video URL", async () => {
+    const { service, sub, spaces } = setup()
+    sub.platforms = ["TIKTOK"]
+    const post = "https://www.tiktok.com/@creator/video/7629388754888740110"
+    const cover = "https://p16-common-sign.tiktokcdn-us.com/cover?x-signature=temporary"
+    const image = await sharp({ create: { width: 1, height: 1, channels: 3, background: "red" } })
+      .png()
+      .toBuffer()
+    http.post.mockResolvedValueOnce({
+      data: [{ webVideoUrl: post, videoMeta: { coverUrl: cover } }],
+    })
+    http.get.mockResolvedValueOnce({ data: image })
+
+    await expect(service.refresh(71, 81)).resolves.toMatchObject([
+      {
+        sourceUrl: post,
+        mediaUrl: post,
+        thumbnailUrl: expect.stringMatching(
+          /^https:\/\/files\.example\/inspiration-radar\/tiktok-covers\/.+\.webp$/
+        ),
+      },
+    ])
+    expect(http.get).toHaveBeenCalledWith(cover, expect.objectContaining({ maxRedirects: 0 }))
+    expect(spaces.uploadBuffer).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      expect.any(String),
+      "image/webp"
+    )
+  })
+
+  it("retains a TikTok item with no thumbnail when the cover download fails", async () => {
+    const { service, sub, spaces } = setup()
+    sub.platforms = ["TIKTOK"]
+    const post = "https://www.tiktok.com/@creator/video/7629388754888740110"
+    http.post.mockResolvedValueOnce({
+      data: [{ webVideoUrl: post, videoMeta: { coverUrl: "https://p16.tiktokcdn-us.com/expired" } }],
+    })
+    http.get.mockRejectedValueOnce(new Error("403"))
+
+    await expect(service.refresh(71, 81)).resolves.toMatchObject([
+      { mediaUrl: post, thumbnailUrl: undefined },
+    ])
+    expect(spaces.uploadBuffer).not.toHaveBeenCalled()
   })
 
   it.each([

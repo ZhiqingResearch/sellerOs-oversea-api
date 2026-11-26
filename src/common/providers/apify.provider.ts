@@ -214,6 +214,45 @@ export class ApifyProvider {
     return this.parseTikTokResults(raw)
   }
 
+  async fetchTikTokCover(postUrl: string): Promise<string | undefined> {
+    const post =
+      /^https:\/\/(?:www\.)?tiktok\.com\/(@[\w.-]+\/(?:video|photo)\/(\d+))\/?(?:[?#].*)?$/.exec(postUrl)
+    if (!post) return
+
+    const raw = await this.runActorSync(
+      TIKTOK_ACTOR,
+      { postURLs: [`https://www.tiktok.com/${post[1]}`], shouldDownloadCovers: true },
+      { radarPlatform: "TikTok", maxRetries: 0, maxTotalChargeUsd: 1 }
+    )
+    return this.parseTikTokResults(raw).find(item => item.externalId === post[2])?.thumbnailUrl
+  }
+
+  async downloadTikTokCover(coverUrl: string): Promise<Buffer> {
+    const url = new URL(coverUrl)
+    const actorStorage =
+      url.origin === "https://api.apify.com" &&
+      /^\/v2\/key-value-stores\/[\w~-]+\/records\/[\w.()!'-]+$/.test(url.pathname)
+    const tiktokCdn = /\.tiktokcdn(?:-us|-eu)?\.com$/.test(url.hostname)
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      url.port ||
+      (!actorStorage && !tiktokCdn)
+    ) {
+      throw new Error("不支持的 TikTok 封面地址")
+    }
+
+    const response = await axios.get<Buffer>(url.href, {
+      responseType: "arraybuffer",
+      timeout: 8_000,
+      maxContentLength: 5 * 1024 * 1024,
+      maxRedirects: 0,
+      ...(actorStorage && { headers: { Authorization: `Bearer ${this.apiToken}` } }),
+    })
+    return Buffer.from(response.data)
+  }
+
   async fetchTikTokShopProduct(
     productInput: string,
     region: TikTokShopRegion = "US"
@@ -534,7 +573,10 @@ export class ApifyProvider {
       const videoMeta = r.videoMeta as Record<string, unknown> | undefined
 
       const webVideoUrl = r.webVideoUrl as string | undefined
-      const coverUrl = (videoMeta?.coverUrl ?? r.coverUrl ?? r.thumbnailUrl) as string | undefined
+      const coverUrl = (videoMeta?.coverUrl ||
+        videoMeta?.originalCoverUrl ||
+        r.coverUrl ||
+        r.thumbnailUrl) as string | undefined
       if (!webVideoUrl && !coverUrl) continue
 
       const authorName = (authorMeta?.name ?? authorMeta?.nickName ?? r.authorName) as

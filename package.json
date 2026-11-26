@@ -40,7 +40,8 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "gateway:image-models": "node scripts/pull-gateway-image-models.cjs",
     "gateway:image-price": "node -r ts-node/register scripts/set-image-price-multiplier.ts",
-    "image-generation:size-test": "node -r ts-node/register scripts/test-image-generation-sizing.ts"
+    "image-generation:size-test": "node -r ts-node/register scripts/test-image-generation-sizing.ts",
+    "inspiration-radar:repair-tiktok-cover": "node --env-file-if-exists=.env -r ts-node/register scripts/repair-inspiration-tiktok-cover.ts"
   },
   "dependencies": {
     "@alicloud/dm20151123": "^1.10.2",

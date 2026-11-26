@@ -8,6 +8,7 @@ import { PrismaService } from "../prisma/prisma.service"
 import { UsageService } from "../usage/usage.service"
 import { CreateSubscriptionDto, Platform } from "./dto/create-subscription.dto"
 import { UpdateSubscriptionDto } from "./dto/update-subscription.dto"
+import { TikTokCoverService } from "./tiktok-cover.service"
 
 const MAX_SUBSCRIPTIONS = 5
 
@@ -24,7 +25,8 @@ export class InspirationRadarService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly apify: ApifyProvider,
-    private readonly usage: UsageService
+    private readonly usage: UsageService,
+    private readonly tiktokCovers: TikTokCoverService
   ) {}
 
   // ==================== 订阅 CRUD ====================
@@ -123,6 +125,7 @@ export class InspirationRadarService {
     }
 
     const results = (await beforeQuotaCharge(Promise.all(fetches))).flat()
+    await this.tiktokCovers.storeForRefresh(results)
 
     const charge = await this.prisma.$transaction(async tx => {
       await tx.$queryRaw`SELECT id FROM InspirationSubscription WHERE id = ${id} FOR UPDATE`
