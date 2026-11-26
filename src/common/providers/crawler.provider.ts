@@ -177,14 +177,14 @@ export class CrawlerProvider {
   /** 调爬虫 PDP 接口；爬虫返回 { error } 时抛 CrawlerError，5xx 也抛 CrawlerError */
   async fetchPdp(url: string): Promise<RawProductData> {
     const start = Date.now()
-    const resp = await this.post("/pdp", url)
+    const resp = await this.post("/pdp", url, 60_000)
     return this.parseEnvelope<RawProductData>(resp.status, resp.data, "pdp", url, start)
   }
 
   /** 调审计爬虫接口（返回含 qa/review/product_information_hhl 等富字段）；信封解析同 fetchPdp */
   async fetchAudit(url: string): Promise<RawAuditData> {
     const start = Date.now()
-    const resp = await this.post(AUDIT_PATH, url)
+    const resp = await this.post(AUDIT_PATH, url, 120_000)
     // 审计兜底按 HTTP 失败触发，不能被异常服务的 code:200 信封掩盖。
     if (isQuotaResponse({ status: resp.status, ...((resp.data && typeof resp.data === "object") ? resp.data : {}) })) throw new UpstreamQuotaError("crawler")
     if (resp.status < 200 || resp.status >= 300) {
@@ -193,8 +193,8 @@ export class CrawlerProvider {
     return this.parseEnvelope<RawAuditData>(resp.status, resp.data, "audit", url, start)
   }
 
-  /** 统一向爬虫服务 POST { url }（Bearer + 60s 超时 + 所有状态码都解析 body）。 */
-  private post(path: string, url: string) {
+  /** 统一向爬虫服务 POST { url }（Bearer + 所有状态码都解析 body）。 */
+  private post(path: string, url: string, timeoutMs: number) {
     const baseUrl = this.config.get<string>("CRAWLER_API_BASE_URL", "http://47.108.114.243:6666")
     const token = this.config.get<string>("CRAWLER_API_TOKEN", "")
     return axios.post<unknown>(
@@ -202,7 +202,7 @@ export class CrawlerProvider {
       { url },
       {
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        timeout: 60_000,
+        timeout: timeoutMs,
         validateStatus: () => true,
       }
     )
