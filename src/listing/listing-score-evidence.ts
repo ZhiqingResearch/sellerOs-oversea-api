@@ -344,7 +344,7 @@ function projectDescription(assessment: Record<string, unknown>, source: Listing
       deductions.push({ ruleId: "alexa.description", checkId: item.checkId, points: 1, reason: uiText(`缺少${name}`, `Missing ${name}`), evidence: source.description.trim() ? uiText(`description逐项核验：未确认${name}；不得以Bullet或页面摘要代替描述。`, `Description check: ${name} not verified; bullets or page summaries cannot substitute for the description.`) : uiText("description为空，未提供独立产品描述。", "Description is empty; no standalone product description was provided.") })
     }
   }
-  return { score: 3 - deductions.length, description: `${states.join("；")}。`, deductions, assessment }
+  return { score: 3 - deductions.length, description: uiText(`${states.join("；")}。`, `${states.join(". ")}.`), deductions, assessment }
 }
 
 export function projectListingCriterionEvidence(

@@ -93,6 +93,33 @@ describe("Listing 记录补充与费用汇总", () => {
     expect(prisma.usageLog.findMany).not.toHaveBeenCalled()
   })
 
+  it("来源分析失败时，历史详情和运行详情都返回同一份已保存的 A/B 方案及评分", async () => {
+    const runId = "test-listing-run"
+    const data = {
+      params: { mode: "standard" },
+      plans: [98.5, 98].map((total, index) => ({
+        result: { title: index ? "Plan B" : "Plan A" }, scoreResult: { total },
+      })),
+    }
+    const run = { runId, status: "COMPLETED", updatedAt: new Date() }
+    const record = { id: 1, data }
+    const prisma = {
+      history: { findFirst: jest.fn()
+        .mockResolvedValueOnce({ ...record, listingRun: { ...run, steps: [
+          { operation: "category_match", status: "FAILED", error: "Internal server error" },
+        ] } })
+        .mockResolvedValueOnce({ ...record, listingRun: run }) },
+      usageLog: { findMany: jest.fn().mockResolvedValue([]) },
+    }
+    const history = new HistoryService(prisma as unknown as PrismaService)
+    const detail = await history.findById(record.id, 3)
+    const byRun = await history.findByRunId(runId, 3)
+    for (const response of [detail, byRun]) {
+      expect(response).toMatchObject({ ...record, listingRunId: runId, listingStatus: "COMPLETED" })
+    }
+    expect(detail.listingSteps).toEqual([expect.objectContaining({ status: "FAILED", error: "Internal server error" })])
+  })
+
   it("按实际账单补充 MCP 消耗，并限制用户和 runId", async () => {
     const prisma = {
       history: {

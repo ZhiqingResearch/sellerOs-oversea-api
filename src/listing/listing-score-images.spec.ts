@@ -1,4 +1,5 @@
 import axios from "axios"
+import { withUiLanguage } from "../common/i18n/request-language"
 import { plainToInstance } from "class-transformer"
 import { validate } from "class-validator"
 import sharp from "sharp"
@@ -78,6 +79,26 @@ describe("Listing 实际图片输入", () => {
       IMAGE_URL,
       expect.objectContaining({ maxRedirects: 0, maxContentLength: 8 * 1024 * 1024 })
     )
+  })
+
+  it("英文报告的图片提示按角色使用英文标签，保留用户原文", async () => {
+    const data = await sharp({ create: { width: 10, height: 10, channels: 3, background: "white" } }).png().toBuffer()
+    jest.spyOn(axios, "get").mockResolvedValue({ data })
+    const images = [
+      { url: IMAGE_URL, role: "main" as const },
+      { url: IMAGE_URL, role: "secondary" as const },
+      { url: IMAGE_URL, role: "aplus" as const },
+    ]
+    await withUiLanguage("en-US", async () => {
+      const content = await prepareListingScoreImages("包装标注原文", images)
+      expect(content?.[0]).toEqual({ type: "text", text: "包装标注原文" })
+      const instructions = content?.slice(1).filter(part => part.type === "text").map(part => part.text).join(" ")
+      expect(instructions).toContain("Main image")
+      expect(instructions).toContain("Secondary image 1")
+      expect(instructions).toContain("A+1")
+      expect(instructions).not.toMatch(/\p{Script=Han}/u)
+      expect(buildListingImageSystemPrompt("Score this listing.", images)).not.toMatch(/\p{Script=Han}/u)
+    })
   })
 
   it("整批先校验，遇到坏地址不发下载请求", async () => {

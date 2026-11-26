@@ -50,7 +50,8 @@ it("独立评分交付及重读按英文处理固定文案，原始模型记录�
       score: 4,
       deductions: [{ points: 1, reason: "Score = 5 × qualifying bullets / N", evidence }],
     })
-    expect(await f.service.read(3, f.dto.scoreRequestId)).toMatchObject({ text: result.text })
+    const reopened = await withUiLanguage("zh-CN", () => f.service.read(3, f.dto.scoreRequestId))
+    expect(reopened.text).toBe(result.text)
   })
   expect(f.row().outputText).toBe(incident.primary)
   expect(f.streamChat).toHaveBeenCalledTimes(1)
