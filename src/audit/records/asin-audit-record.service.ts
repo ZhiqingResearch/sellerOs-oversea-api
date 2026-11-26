@@ -8,7 +8,9 @@ import {
 } from "@nestjs/common"
 import { AsinAuditRecordStatus, Prisma } from "@prisma/client"
 import { PrismaClientKnownRequestError } from "@prisma/client/runtime/library"
-import { hashJson } from "../../common/utils/canonical-json"
+import { MISSING_ORIGINAL_EN, MISSING_ORIGINAL_ZH } from "../../asin-audit/prompts/skill-assembler"
+import { uiLanguage } from "../../common/i18n/request-language"
+import { hashJson, isJsonObject } from "../../common/utils/canonical-json"
 import { linkAsinGeneratedUsage } from "../../common/utils/link-asin-generated-usage"
 import { PrismaService } from "../../prisma/prisma.service"
 import {
@@ -338,7 +340,7 @@ export class AsinAuditRecordService {
         scoreResult: snapshot.scoreResult,
         optimizationRevision:
           record.latestOptimizationRevision > 0 ? record.latestOptimizationRevision : null,
-        optimizationResult: optimization?.optimizationResult ?? null,
+        optimizationResult: localizeOptimizationDetail(optimization?.optimizationResult ?? null),
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
       }
@@ -497,6 +499,21 @@ function parseDate(value: string, dayOffset: number) {
     })
   }
   return new Date(Date.UTC(year, month - 1, day + dayOffset) - 8 * 60 * 60 * 1000)
+}
+
+function localizeOptimizationDetail(result: Prisma.JsonValue): Prisma.JsonValue {
+  if (uiLanguage() !== "en-US" || !isJsonObject(result) || !Array.isArray(result.fieldRewrites)) {
+    return result
+  }
+
+  return {
+    ...result,
+    fieldRewrites: result.fieldRewrites.map(rewrite =>
+      isJsonObject(rewrite) && rewrite.original === MISSING_ORIGINAL_ZH
+        ? { ...rewrite, original: MISSING_ORIGINAL_EN }
+        : rewrite
+    ),
+  }
 }
 
 function toJson(value: unknown): Prisma.InputJsonValue {

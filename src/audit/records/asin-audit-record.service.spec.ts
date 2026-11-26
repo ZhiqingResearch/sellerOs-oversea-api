@@ -1,6 +1,7 @@
 jest.mock("../../generation-record/generation-record-success", () => ({ recordGenerationSuccess: jest.fn().mockResolvedValue(undefined) }))
 import { ConflictException, NotFoundException } from "@nestjs/common"
 import { AsinAuditRecordStatus } from "@prisma/client"
+import { withUiLanguage } from "../../common/i18n/request-language"
 import { hashJson } from "../../common/utils/canonical-json"
 import { AsinAuditRecordService } from "./asin-audit-record.service"
 import { CreateAsinAuditRecordDto } from "./dto/create-asin-audit-record.dto"
@@ -344,6 +345,48 @@ describe("AsinAuditRecordService", () => {
       })
     }
   )
+
+  it("localizes the archived R1 placeholder in English detail and preserves all original data", async () => {
+    const { service, tx } = createService()
+    const recordId = "b9912892-6909-468c-a252-6a40ec697d5a"
+    const placeholder = "（原字段缺失）"
+    const optimizationResult = {
+      listing: { title: "Beats Solo 4", searchTerms: ["wireless headphones"] },
+      fieldRewrites: [
+        {
+          field: "Search Terms",
+          original: placeholder,
+          rewritten: "wireless headphones",
+          reason: "Populate available search terms",
+        },
+        {
+          field: "Title",
+          original: `商品标签 ${placeholder}`,
+          rewritten: "Beats Solo 4 Wireless Headphones",
+          reason: placeholder,
+        },
+      ],
+    }
+    const archived = structuredClone(optimizationResult)
+    tx.asinAuditRecord.findFirst.mockResolvedValue({ id: recordId, latestOptimizationRevision: 1 })
+    tx.asinAuditScoreSnapshot.findUnique.mockResolvedValue({ schemaVersion: 1 })
+    tx.asinAuditOptimizationRevision.findUnique.mockResolvedValue({ optimizationResult })
+
+    const english = await withUiLanguage("en-US", () => service.findOne(7, recordId))
+    expect(english.optimizationRevision).toBe(1)
+    expect(english.optimizationResult).toEqual({
+      ...archived,
+      fieldRewrites: [
+        { ...archived.fieldRewrites[0], original: "Original field unavailable" },
+        archived.fieldRewrites[1],
+      ],
+    })
+    const chinese = await withUiLanguage("zh-CN", () => service.findOne(7, recordId))
+    expect(chinese.optimizationResult).toEqual(archived)
+    expect(optimizationResult).toEqual(archived)
+    expect(tx.asinAuditRecord.update).not.toHaveBeenCalled()
+    expect(tx.asinAuditOptimizationRevision.create).not.toHaveBeenCalled()
+  })
 
   it("soft-deletes only records owned by the current user", async () => {
     const { service, prisma } = createService()
