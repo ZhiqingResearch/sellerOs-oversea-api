@@ -1,5 +1,5 @@
 import { Logger } from "@nestjs/common"
-import { uiLanguage } from "../common/i18n/request-language"
+import { uiLanguage, uiText } from "../common/i18n/request-language"
 import { isJsonObject } from "../common/utils/canonical-json"
 import { parseListingJsonObject } from "./listing-result-parser"
 import { CDQ_CRITERION_NAMES_EN, CDQ_DIMENSION_NAMES_EN, CDQ_WEIGHT_NOTE_EN } from "./listing-cdq-labels"
@@ -11,6 +11,7 @@ import { validateListingReportRules, type ListingRuleContext } from "./listing-s
 import { recalculateListingAttributeScore } from "./listing-attribute-normalization"
 import { normalizeListingScoreArithmetic, normalizeListingScoreStructure } from "./listing-score-normalization"
 import { reconcileListingDescriptionScore } from "./listing-description-score"
+import { SEARCH_TERMS_UNAVAILABLE } from "./listing-search-terms-score"
 
 const SCORE_SOURCE_LABELS_EN = new Map([
   ["官方", "Official"],
@@ -65,49 +66,46 @@ export function prepareListingScoreDelivery(
   // 汇总由已交付的细则得分计算，不触发规则校对或模型重试。
   report = normalizeListingScoreArithmetic(report)
   report = recalculateCdqScoreSummary(report)
-  if (uiLanguage() === "en-US" && report.scoreVersion === CDQ_SCORE_VERSION) {
+  if (report.scoreVersion === CDQ_SCORE_VERSION) {
+    const isEnglish = uiLanguage() === "en-US"
     const sourceText = context?.sourceFacts ? JSON.stringify(context.sourceFacts) : undefined
     const dimensions = report.dimensions as Array<{
       name: string
-      criteria: Array<{ name: string; source?: unknown; description?: unknown; deductions: Array<{ reason: string }> }>
+      criteria: Array<{ name: string; source?: unknown; status?: unknown; description?: unknown; deductions: Array<{ reason: string }> }>
       cdq?: unknown
       subtitle?: string
     }>
-    dimensions.forEach((dimension, index) => {
-      dimension.name = CDQ_DIMENSION_NAMES_EN[index]
-      dimension.criteria.forEach((criterion, criterionIndex) => {
-        criterion.name = CDQ_CRITERION_NAMES_EN[index][criterionIndex]
-        if (typeof criterion.source === "string")
-          criterion.source = SCORE_SOURCE_LABELS_EN.get(criterion.source.trim()) ?? criterion.source
-      })
+    const searchTerms = dimensions[1].criteria[3]
+    if (searchTerms.status === "UNAVAILABLE" && SEARCH_TERMS_UNAVAILABLE.some(label => label === searchTerms.description))
+      searchTerms.description = uiText(...SEARCH_TERMS_UNAVAILABLE)
+    report.suggestions = (report.suggestions as string[]).map(suggestion => {
+      const text = suggestion.trim()
+      if (sourceText?.includes(text)) return suggestion
+      if (!isEnglish && text === CDQ_WEIGHT_NOTE_EN)
+        return "CDQ权重为内部整理口径，不是Amazon官方评分算法。"
+      return isEnglish && CDQ_WEIGHT_NOTE_ZH.test(text) ? CDQ_WEIGHT_NOTE_EN : suggestion
     })
-    const bullet = dimensions[3].criteria[1]
-    if (typeof bullet.description === "string")
-      bullet.description = localizeBulletFormula(bullet.description, sourceText)
-    for (const deduction of bullet.deductions)
-      deduction.reason = localizeBulletFormula(deduction.reason, sourceText)
-    report.suggestions = (report.suggestions as string[]).map(suggestion =>
-      CDQ_WEIGHT_NOTE_ZH.test(suggestion.trim()) && !sourceText?.includes(suggestion.trim())
-        ? CDQ_WEIGHT_NOTE_EN
-        : suggestion
-    )
-    const [dimension] = dimensions
-    const cdq = dimension.cdq
-    if (isJsonObject(cdq) && typeof cdq.effectiveMax === "number" && typeof cdq.applicableMax === "number" &&
-      (typeof cdq.normalizedScore === "number" || cdq.normalizedScore === null)) {
-      dimension.subtitle = formatCdqSubtitle(cdq.normalizedScore, cdq.effectiveMax, cdq.applicableMax)
+    if (isEnglish) {
+      dimensions.forEach((dimension, index) => {
+        dimension.name = CDQ_DIMENSION_NAMES_EN[index]
+        dimension.criteria.forEach((criterion, criterionIndex) => {
+          criterion.name = CDQ_CRITERION_NAMES_EN[index][criterionIndex]
+          if (typeof criterion.source === "string")
+            criterion.source = SCORE_SOURCE_LABELS_EN.get(criterion.source.trim()) ?? criterion.source
+        })
+      })
+      const bullet = dimensions[3].criteria[1]
+      if (typeof bullet.description === "string")
+        bullet.description = localizeBulletFormula(bullet.description, sourceText)
+      for (const deduction of bullet.deductions)
+        deduction.reason = localizeBulletFormula(deduction.reason, sourceText)
+      const [dimension] = dimensions
+      const cdq = dimension.cdq
+      if (isJsonObject(cdq) && typeof cdq.effectiveMax === "number" && typeof cdq.applicableMax === "number" &&
+        (typeof cdq.normalizedScore === "number" || cdq.normalizedScore === null)) {
+        dimension.subtitle = formatCdqSubtitle(cdq.normalizedScore, cdq.effectiveMax, cdq.applicableMax)
+      }
     }
   }
   return JSON.stringify(report)
 }
-/** 在首次生成阶段约束完整性，不把事后模型自检变成用户操作的前置条件。 */
-export const LISTING_SCORE_OUTPUT_DELIVERY_PROMPT = `
-请在本次回答中一次性完成现有提示词要求的完整评分报告，只输出报告JSON。
-所有得分必须介于0与对应maxScore之间，总分介于0与100之间；只有规则明确未获取/不适用项可以是null。不得用负分抵消其他项目或凑总分，扣分须符合对应细则的固定规则。
-每个细则先列事实判断和扣分明细，再计算score=maxScore-扣分合计，不得独立猜测分数。描述项满分3，缺规格段扣1、缺具体场景扣1，例如仅缺规格段必须得2分。
-描述项必须先输出assessment.checks中的specifications和overview_scenes两项判断及对应原文引用，再从这两个判断生成description、deductions和score。两项均满足时score=3、deductions=[]；有一项不满足时score=2，并在deductions说明缺少哪一项及原文依据。禁止输出“包含场景与规格”却给2分，也禁止score小于3时deductions为空或只有0分明细。
-生成前逐项依据原文和既有规则判断，重点保证细则得分与对应扣分依据一致；不要新增规则或为了凑分改写扣分依据。CDQ汇总、百分制得分及40分贡献由后端按细则得分和既定状态计算，再与其余维度得分相加得到总分；仍完整输出原要求的汇总字段。
-每个维度完整输出name/weight/maxScore/score/criteria；每个细则完整输出name/maxScore/score/description/source/deductions，CDQ项同时输出既定status。没有扣分时deductions为[]，未获取项按既定状态规则表示，不伪造证据。
-要求assessment的评分项在同一报告中逐条补齐；引用仅取对应字段中的真实连续原文。把判断不确定的事项按原提示词处理，不把营销话术当数字或具名认证，不将正文片段挪到其他字段。
-保留报告的suggestions和potential。不要用校验失败、需要重试、请补充校对或内部错误替代报告，也不要输出局部corrections格式。
-`

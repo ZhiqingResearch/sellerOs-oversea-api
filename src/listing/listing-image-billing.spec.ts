@@ -61,7 +61,7 @@ describe("图片评分模型与扣费", () => {
         potential: "",
       })
       expect(streamChat).toHaveBeenCalledWith(
-        expect.stringContaining("CDQ采用当前提示词标准"),
+        expect.stringContaining("Assess main image compliance"),
         "文字",
         expect.objectContaining({ model, userContent, resolveBilling: true })
       )

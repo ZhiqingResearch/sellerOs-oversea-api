@@ -1,24 +1,22 @@
-import { uiLanguage } from "../common/i18n/request-language"
 import { buildListingAlexaPrompt } from "./listing-alexa-score"
 import { CDQ_DIMENSION_NAMES_EN, CDQ_WEIGHT_NOTE_EN } from "./listing-cdq-labels"
-import { LISTING_SCORE_OUTPUT_DELIVERY_PROMPT } from "./listing-score-delivery"
+import { withListingOutputLanguage } from "./listing.prompts"
 import { buildListingEvidencePrompt } from "./listing-score-evidence-flow"
 import { parseListingScoreSource } from "./listing-score-evidence"
 import { LISTING_RULE_CHECK_PROMPT } from "./listing-score-rules"
-import { LISTING_SCORE_CONSISTENCY_PROMPT } from "./listing-score-validation"
+import { englishScoreReference } from "./listing-score-reference"
 
 /** 自动评分与独立打分共用首次评分约束，规则和证据要求不随入口改变。 */
 export function buildListingScoreSystemPrompt(systemPrompt: string | undefined, userPrompt: string): string {
   const source = parseListingScoreSource(userPrompt)
-  const englishInstructions = uiLanguage() === "en-US"
-    ? `\nUse English for all scoring labels, descriptions, deduction reasons, suggestions and summaries, including when rules give examples in Chinese. Preserve source quotations as written. For CDQ, use these dimension names in order: ${CDQ_DIMENSION_NAMES_EN.join(", ")}. Use "Search terms unavailable" for the unavailable search terms description.
-Use "Official", "Industry research", or "Practical guidance" for the scoring source labels and "${CDQ_WEIGHT_NOTE_EN}" for the CDQ weight note.
-If explaining the Alexa bullet formula, write "5 × qualifying bullets / N" for standard mode or "min(5, 5 × qualifying bullets / 6)" for custom mode. Do not copy the Chinese formula wording into scoring explanations.\n`
-    : ""
-  return (systemPrompt ?? "") + LISTING_SCORE_CONSISTENCY_PROMPT + LISTING_RULE_CHECK_PROMPT +
-    buildListingEvidencePrompt(source) + LISTING_SCORE_OUTPUT_DELIVERY_PROMPT + buildListingAlexaPrompt(source) +
-    (source?.structuredAttributes?.length ? `
-本次已提供结构化属性原文，首次回答请完整填写assessment.attributeChecks：每个实际属性对应一行，正确的写NONE，口径不明的写PENDING，不省略正确项，不虚构未提供的后台模板字段。判断推荐/选填属性未填时只写优化建议，不生成扣分；已填写的推荐属性有原文可证的真实错误仍按既定规则评估。
-先完成逐项事实判断，再按原有3/2/1权重及100%/50%/0%严重度计算。每条deductions必须对应具体字段问题，不能输出“属性填写完整度与重要度加权扣分”等笼统失分；全部NONE/PENDING时本项30分，无扣分。description、score、deductions必须来自同一张逐项取证表，不得一边写填写规范一边以完整度为由扣分。
-` : "") + englishInstructions
+  return withListingOutputLanguage([
+    englishScoreReference(systemPrompt ?? ""),
+    LISTING_RULE_CHECK_PROMPT,
+    buildListingEvidencePrompt(source),
+    buildListingAlexaPrompt(source),
+    `Return the complete report JSON on this first pass according to the requested marketplace rubric, including suggestions and potential. Preserve actual source quotations and machine identifiers. Apply the CDQ-specific fields, examples and rules only when the requested rubric uses CDQ.
+For CDQ use the localized equivalents of these dimension names in order: ${CDQ_DIMENSION_NAMES_EN.join(", ")}. Use the criterion-specific source labels "Official", "Industry research" and "Practical guidance". End with the localized equivalent of "${CDQ_WEIGHT_NOTE_EN}".
+Each dimension includes name, weight, maxScore, score and criteria. Each criterion includes name, maxScore, score, description, source and deductions, plus the required CDQ status. Compute each criterion from verified evidence and itemized deductions. Scores must be between zero and maxScore and the total between zero and 100. Use null only for unavailable/inapplicable items as specified. For verified items score=maxScore when deductions is empty. Keep dimension penalties separate. V=0 means no CDQ score and no total. Include the original summary fields.
+For example, "No variation matrix was provided." A deduction might read "Bullet 2 gives no measurable specification" and a suggestion "Add a verified dimension or capacity to bullet 2." Use the actual evidence and bullet number. If only the specification section is absent, the description earns 2/3. Include specifications and overview_scenes in assessment.checks with exact quotes. Complete each required evidence row, and use the same findings for the score and its explanation. Return the report, without partial corrections or internal diagnostics.`,
+  ].filter(Boolean).join("\n\n"))
 }

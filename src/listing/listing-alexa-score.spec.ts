@@ -233,7 +233,7 @@ describe("Alexa 按既有规则计算且不拦截报告", () => {
     const context = JSON.parse(prompt.split("\n").find(line => line.startsWith('{"explicitBullets"'))!)
     expect(context.explicitBullets.map((item: { index: number }) => item.index)).toEqual([1, 2, 3, 7])
     expect(context.isDescriptionEmpty).toBe(true)
-    expect(prompt).toContain("未列出的条目仍需你判断")
+    expect(prompt).toContain("not an exhaustive list of qualifying bullets")
     expect(buildListingAlexaPrompt()).toBe("")
   })
 })

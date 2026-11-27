@@ -113,7 +113,7 @@ describe("评分复核请求的独立输出契约", () => {
       expect(requested.assessmentRequirement.instructions).toEqual(expect.any(String))
       expect(requested.assessmentRequirement.formula).toEqual(expect.any(String))
     }
-    expect(request.systemPrompt).toContain("assessment直接填写attributeChecks、terms、relations、bullets或checks等事实字段")
-    expect(request.systemPrompt).toContain("不返回instructions或formula，不得再嵌套一层assessment")
+    expect(request.systemPrompt).toContain("return the actual attributeChecks, terms, relations, bullets or checks directly within assessment")
+    expect(request.systemPrompt).toContain("Do not return instructions or formula, or nest another assessment")
   })
 })

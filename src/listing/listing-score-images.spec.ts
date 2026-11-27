@@ -63,10 +63,10 @@ describe("Listing 实际图片输入", () => {
     ])
     expect(content?.[0]).toEqual({ type: "text", text: "原始文字" })
     expect(content?.[1]).toMatchObject({
-      text: expect.stringContaining("主图；后端读取的原始像素：1200×1000") as unknown,
+      text: expect.stringContaining("Main image. Original dimensions: 1200×1000") as unknown,
     })
     expect(content?.[3]).toMatchObject({
-      text: expect.stringContaining("页面图片标签：A+1；") as unknown,
+      text: expect.stringContaining("Page image label: A+1.") as unknown,
     })
     expect(content?.[2]).toMatchObject({
       type: "image_url",
@@ -126,31 +126,31 @@ describe("Listing 实际图片输入", () => {
     ]
     const content = await prepareListingScoreImages("文字", images)
     const labels = [
-      "主图",
-      ...Array.from({ length: 7 }, (_, i) => `副图${i + 1}`),
+      "Main image",
+      ...Array.from({ length: 7 }, (_, i) => `Secondary image ${i + 1}`),
       ...Array.from({ length: 17 }, (_, i) => `A+${i + 1}`),
     ]
     labels.forEach((label, index) => {
       expect(content?.[index * 2 + 1]).toMatchObject({
-        text: expect.stringContaining(`页面图片标签：${label}；`) as unknown,
+        text: expect.stringContaining(`Page image label: ${label}.`) as unknown,
       })
       expect(content?.[index * 2 + 1]).toMatchObject({
         text: expect.stringContaining(label.startsWith("A+")
-          ? "仅用于独立的 A+ 项；禁止用于主/副图项"
-          : "证据归属：用于主/副图项") as unknown,
+          ? "Use only for A+ content"
+          : "Use only for gallery scoring") as unknown,
       })
     })
     expect(JSON.stringify(content)).not.toContain("附件")
     expect(content?.at(-1)).toMatchObject({
       text: expect.stringContaining(
-        "主/副图共8张【主图、副图1、副图2、副图3、副图4、副图5、副图6、副图7】；A+共17张"
+        "8 gallery images [Main image, Secondary image 1, Secondary image 2, Secondary image 3, Secondary image 4, Secondary image 5, Secondary image 6, Secondary image 7], 17 A+ images"
       ) as unknown,
     })
     expect(content?.at(-1)).toMatchObject({
-      text: expect.stringContaining("只出现在 A+4、A+12、A+13 时，不能据此判定主/副图信息不一致") as unknown,
+      text: expect.stringContaining("A defect visible only in A+4, A+12 or A+13 cannot establish a gallery defect") as unknown,
     })
     expect(content?.at(-1)).toMatchObject({
-      text: expect.stringContaining("不能自动给满分") as unknown,
+      text: expect.stringContaining("Never award full marks without gallery evidence") as unknown,
     })
     // 校验实际送出的 JPEG 与页面标签绑定，而不只检查旁边的文字。
     for (const [imageIndex, label] of [
@@ -164,10 +164,10 @@ describe("Listing 实际图片输入", () => {
       expect(part.image_url.url).toBe(`data:image/jpeg;base64,${expected.toString("base64")}`)
     }
     const prompt = buildListingImageSystemPrompt("原规则", images)
-    expect(prompt).toContain("必须使用图片前标注的页面图片标签")
-    expect(prompt).toContain("禁止使用跨分组累计")
-    expect(prompt).toContain("不能把相邻图片的文字归到本图")
-    expect(prompt).toContain("图片本身未添加识别标记")
+    expect(prompt).toContain("Cite each image by its supplied page label")
+    expect(prompt).toContain("never by a cumulative attachment number")
+    expect(prompt).toContain("Never attribute text from an adjacent image")
+    expect(prompt).toContain("The preview has no identifying marks")
   })
 
   it("标签只放在文本中，预览不添加背景或留白干扰评分", async () => {
@@ -202,10 +202,10 @@ describe("Listing 实际图片输入", () => {
   it("评估实图并按当前CDQ规则区分未获取的图组", () => {
     const prompt = buildListingImageSystemPrompt("原评分规则", [{ url: IMAGE_URL, role: "main" }])
     expect(prompt).toContain("原评分规则")
-    expect(prompt).toContain("主/副图1张，A+ 图片0张")
-    expect(prompt).toContain("CDQ采用当前提示词标准")
-    expect(prompt).toContain("标未获取、得分留空")
-    expect(prompt).toContain("字段当前值、规则和修改建议")
+    expect(prompt).toContain("1 gallery images and 0 A+ images")
+    expect(prompt).toContain("Assess main image compliance")
+    expect(prompt).toContain("Leave unavailable evidence unscored")
+    expect(prompt).toContain("observed value, applicable rule and suggested change")
   })
 
   it.each([
@@ -213,10 +213,10 @@ describe("Listing 实际图片输入", () => {
     { images: [{ url: IMAGE_URL, role: "main" as const }, { url: IMAGE_URL, role: "aplus" as const }] },
   ])("A+ 证据只归独立 A+ 项，不影响主副图评分", ({ images }) => {
     const prompt = buildListingImageSystemPrompt("原评分规则", images)
-    expect(prompt).toContain("仅评主图和副图，不评判 A+")
-    expect(prompt).toContain("不能用 A+ 补足主/副图证据")
-    expect(prompt).toContain("不得跨项重复扣分")
-    expect(prompt).toContain("CDQ采用当前提示词标准")
+    expect(prompt).toContain("Score A+ evidence only under A+ content")
+    expect(prompt).toContain("Never use A+ evidence to fill gallery gaps")
+    expect(prompt).toContain("count the same defect in both groups")
+    expect(prompt).toContain("Assess main image compliance")
   })
 
   it("DTO 接受截图中的25张图片并拒绝超量及错误角色", async () => {

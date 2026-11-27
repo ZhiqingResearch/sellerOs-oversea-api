@@ -144,7 +144,7 @@ describe("校对按原始上下文和明确检查点恢复", () => {
         }]
         const merge = () => mergeScoreCorrection(JSON.stringify(patch), plan, "amazon_us", true)
         if (typeof points === "number" && Number.isFinite(points))
-          expect(merge).toThrow("扣分记录必须有正数points")
+          expect(merge).toThrow("Deductions need positive points")
         else expect(merge).toThrow()
       }
     }

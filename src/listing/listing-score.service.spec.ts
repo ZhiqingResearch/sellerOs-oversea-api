@@ -1,3 +1,4 @@
+import { withUiLanguage } from "../common/i18n/request-language"
 jest.mock("../generation-record/generation-record-success", () => ({ recordGenerationSuccess: jest.fn().mockResolvedValue(undefined) }))
 import { INestApplication, Logger, ValidationPipe } from "@nestjs/common"
 import { Test } from "@nestjs/testing"
@@ -138,6 +139,25 @@ describe("独立评分持久化、恢复与结算", () => {
   beforeEach(() => jest.spyOn(images, "prepareListingScoreImages").mockResolvedValue(undefined))
   afterEach(() => jest.restoreAllMocks())
 
+  it.each([
+    ["zh-CN", "Simplified Chinese", "缺少尺寸。", "补充已核实的尺寸。"],
+    ["en-US", "English", "Dimensions are missing.", "Add the verified dimensions."],
+  ] as const)("%s 使用英文模板并保存对应语言的评分说明和建议", async (locale, language, description, suggestion) => {
+    const response = structuredClone(report)
+    Object.assign(response.dimensions[0].criteria[0], { description })
+    response.suggestions = [suggestion]
+    const f = fixture([JSON.stringify(response)])
+    const result = await withUiLanguage(locale, () => f.service.complete(3, dto))
+    const [systemPrompt, source] = f.streamChat.mock.calls[0] as unknown as [string, string]
+    expect(systemPrompt).not.toMatch(/\p{Script=Han}/u)
+    expect(systemPrompt).toContain(`Use ${language} for all scoring labels, descriptions, deduction reasons, optimization suggestions`)
+    expect(source).toBe(dto.userPrompt)
+    expect(JSON.parse(result.text)).toMatchObject({
+      total: 2, dimensions: [{ criteria: [{ description }] }], suggestions: [suggestion],
+    })
+    expect(f.row().billing).toMatchObject({ responseLanguage: locale })
+  })
+
   it.each(["7.25", "0"])(
     "将实际账单模型和实扣 %s 积分交给成功快照，重放不重复扣费",
     async credits => {
@@ -206,8 +226,8 @@ describe("独立评分持久化、恢复与结算", () => {
     expect(delivered.total).toBe(98.4)
     expect(delivered.validationStatus).toBe("BEST_EFFORT")
     expect(f.row()).toMatchObject({ status: "COMPLETED", error: null })
-    expect(f.streamChat.mock.calls[0][0]).toContain("禁止跨项使用ruleId")
-    expect(f.streamChat.mock.calls[0][0]).toContain("CDQ汇总、百分制得分及40分贡献由后端按细则得分和既定状态计算")
+    expect(f.streamChat.mock.calls[0][0]).toContain("Never move a rule to another criterion")
+    expect(f.streamChat.mock.calls[0][0]).toContain("CDQ is normalized over available evidence")
     expect(f.streamChat.mock.calls[0][2]).toMatchObject({ temperature: 0 })
     expect(await f.service.complete(3, input)).toEqual(result)
     expect(f.streamChat).toHaveBeenCalledTimes(1)

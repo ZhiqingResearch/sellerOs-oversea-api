@@ -1,7 +1,7 @@
 import { beforeQuotaCharge, streamBeforeQuotaCharge } from "../common/errors/upstream-quota"
 import { BadGatewayException, BadRequestException, Injectable } from "@nestjs/common"
 import { Prisma } from "@prisma/client"
-import { withOutputLanguage } from "../common/i18n/ai-language"
+import { withListingOutputLanguage } from "./listing.prompts"
 import {
   AiGatewayProvider,
   type AiGatewayBillingUsage,
@@ -73,7 +73,7 @@ export class ListingAiService {
   ) {}
 
   async complete(userId: number, dto: ListingAiInvocationDto) {
-    dto = { ...dto, systemPrompt: withOutputLanguage(dto.systemPrompt ?? "") }
+    dto = { ...dto, systemPrompt: withListingOutputLanguage(dto.systemPrompt ?? "") }
     if (dto.responseFormat === "json_object") {
       await this.assertAffordable(userId, dto.operation)
       const step = await this.listingRunService.beginStep(userId, dto)
@@ -96,7 +96,7 @@ export class ListingAiService {
             isDataValid,
             retryInstruction:
               dto.operation === "attribute_analysis"
-                ? "顶层对象必须包含 questions 数组；每项必须包含非空 id、title、hint、multiSelect=true，以及非空 options 数组。"
+                ? "Return a top-level questions array. Each question requires nonempty id, title and hint fields, multiSelect=true, and a nonempty options array."
                 : undefined,
           }
         ), "step")
@@ -144,7 +144,7 @@ export class ListingAiService {
   }
 
   async *stream(userId: number, dto: ListingAiInvocationDto): AsyncGenerator<AiGatewayStreamEvent> {
-    dto = { ...dto, systemPrompt: withOutputLanguage(dto.systemPrompt ?? "") }
+    dto = { ...dto, systemPrompt: withListingOutputLanguage(dto.systemPrompt ?? "") }
     await this.assertAffordable(userId, dto.operation)
     const step = await this.listingRunService.beginStep(userId, dto)
     try {

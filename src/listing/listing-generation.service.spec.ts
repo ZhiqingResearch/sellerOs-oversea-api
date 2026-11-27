@@ -129,7 +129,7 @@ describe("Listing 后台任务与主生成结算", () => {
       ...autoScore, temperature: 0,
       systemPrompt: buildListingScoreSystemPrompt(autoScore.systemPrompt, autoScore.userPrompt),
     })
-    expect(consume.mock.calls[0][1].systemPrompt).toContain("不得用负分")
+    expect(consume.mock.calls[0][1].systemPrompt).toContain("Scores must be between zero and maxScore")
   })
 
   it("旧格式自动评分负分无依据时正常保留正文，暂不出分且不结算", async () => {

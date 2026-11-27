@@ -182,7 +182,9 @@ export class AiGatewayProvider {
                 messages: [
                   {
                     role: "system",
-                    content: `${systemPrompt}\n\n这是格式纠错重试：必须只输出一个可由 JSON.parse 直接解析的完整 JSON 对象。不要输出解释、Markdown 代码块、注释或省略号。${options?.retryInstruction ? `\n${options.retryInstruction}` : ""}`,
+                    content: [systemPrompt, (operationName.startsWith("Listing ") || uiLanguage() === "en-US"
+                      ? "Correct the response format. Return one complete JSON object that JSON.parse can read directly. Omit explanations, Markdown fences, comments and ellipses."
+                      : "这是格式纠错重试：必须只输出一个可由 JSON.parse 直接解析的完整 JSON 对象。不要输出解释、Markdown 代码块、注释或省略号。") + (options?.retryInstruction ? `\n${options.retryInstruction}` : "")].join("\n\n"),
                   },
                   { role: "user", content: options?.userContent ?? userPrompt },
                 ],

@@ -196,7 +196,7 @@ describe("ListingAiService", () => {
       },
     }, undefined)
     expect(invocations[0]?.systemPrompt).toContain("system")
-    expect(invocations[0]?.systemPrompt).toContain("没有扣分时 score=maxScore")
+    expect(invocations[0]?.systemPrompt).toContain("score=maxScore when deductions is empty")
     expect(invocations[0]?.userPrompt).toBe("user")
     expect(invocations[0]?.options).toMatchObject({
       model: "ZQ-Think-Pro",
@@ -268,7 +268,7 @@ describe("ListingAiService", () => {
     })
     expect(streamChat).not.toHaveBeenCalled()
     expect(generateJson).toHaveBeenCalledWith(
-      "",
+      expect.stringContaining("Use Simplified Chinese"),
       "生成属性问题",
       expect.objectContaining({
         model: "ZQ-Think-Flash",

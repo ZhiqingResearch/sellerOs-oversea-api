@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { withUiLanguage } from "../common/i18n/request-language"
 import { CDQ_SCORE_VERSION, normalizeCdqScoreReport } from "./listing-cdq-score"
-import { buildScoreCorrectionPlan, mergeScoreCorrection } from "./listing-score-correction"
+import { buildScoreCorrectionPlan, buildScoreCorrectionRequest, mergeScoreCorrection } from "./listing-score-correction"
 import { prepareListingScoreDelivery } from "./listing-score-delivery"
 import { buildListingScoreSystemPrompt } from "./listing-score-prompt"
 import { extractScoreRecoveryCore, validateScoreReport } from "./listing-score-recovery"
@@ -125,6 +125,66 @@ describe("新版 CDQ 取证与折算", () => {
     ])
     expect(chinese.dimensions[3].criteria[1].deductions[0].reason).toBe(reason)
     expect(chinese.suggestions[1]).toBe(note)
+  })
+
+  it("英文评分规则和未通过一致性校验的报告均使用英文搜索词缺失提示", () => {
+    const report = createReport()
+    Object.assign(report.dimensions[1].criteria[3], {
+      status: "UNAVAILABLE", description: "Search terms unavailable",
+    })
+    Object.assign(report.dimensions[3].criteria[2], {
+      score: 0, deductions: [{ ruleId: "alexa.description", points: 3, reason: "Missing specifications" }],
+    })
+    for (const language of ["en-US", "zh-CN"] as const) {
+      withUiLanguage(language, () => {
+        const label = language === "en-US" ? "Search terms unavailable" : "SEARCH TERMS未获取"
+        const prompt = buildListingScoreSystemPrompt(undefined, "")
+        expect(prompt).toContain('description="Search terms unavailable"')
+        expect(prompt).not.toMatch(/\p{Script=Han}/u)
+        expect(prompt).toContain(language === "en-US" ? "Use English" : "Use Simplified Chinese")
+        const delivered = JSON.parse(prepareListingScoreDelivery(JSON.stringify(report), "amazon_us")!)
+        expect(delivered.validationStatus).toBe("BEST_EFFORT")
+        expect(delivered.dimensions[1].criteria[3]).toMatchObject({
+          description: label, status: "UNAVAILABLE", score: 4, deductions: [],
+        })
+      })
+    }
+  })
+
+  it("两种界面共用英文评分示例，各自指定返回语言并保留商品取证原文", () => {
+    const rubric = readFileSync(join(__dirname, "prompts/amazon-score-standard.legacy-zh.md"), "utf8")
+    const userPrompt = '<listing-scoring-source>{"title":"墨水","itemHighlights":"","bullets":["每瓶 17000 页"],"description":"材料","searchTerms":""}</listing-scoring-source>'
+    const english = withUiLanguage("en-US", () => buildListingScoreSystemPrompt(rubric, userPrompt))
+    const chinese = withUiLanguage("zh-CN", () => buildListingScoreSystemPrompt(rubric, userPrompt))
+    expect(english.replaceAll("17000 页", "")).not.toMatch(/\p{Script=Han}/u)
+    expect(english).toContain("Reviewed 25 attributes visible on the product page")
+    expect(english).toContain("Specify whether the yield is per bottle or for the entire set.")
+    for (const value of ["15.5/30", "53,500", "ET-2850"]) {
+      expect(chinese).toContain(value)
+      expect(english).toContain(value)
+    }
+    expect(chinese.replaceAll("17000 页", "")).not.toMatch(/\p{Script=Han}/u)
+    expect(chinese).toContain("Reviewed 25 attributes visible on the product page")
+    expect(chinese).toContain("Use Simplified Chinese")
+    expect(english).toContain("Bullet 2 gives no measurable specification")
+    expect(english).not.toContain("SEARCH TERMS未获取")
+    expect(english).toContain('"quote":"17000 页"')
+  })
+
+  it.each(["zh-CN", "en-US"] as const)("%s 重试沿用英文评分模板并保留调用方追加的原文", locale => {
+    const rubric = readFileSync(join(__dirname, "prompts/amazon-score-standard.legacy-zh.md"), "utf8")
+    const reference = rubric.slice(rubric.indexOf("# Listing 质量评分模型")) + "\n调用方原文"
+    const { userPrompt, systemPrompt } = withUiLanguage(locale, () => buildScoreCorrectionRequest(
+      reference, "Original product text", {
+        report: { total: 0, dimensions: [], suggestions: [], potential: "" },
+        criteria: [], shouldCorrectSuggestions: false, pendingTailFields: ["suggestions"],
+      },
+    ))
+    expect(systemPrompt).toContain(locale === "en-US" ? "Use English" : "Use Simplified Chinese")
+    expect(systemPrompt).not.toMatch(/\p{Script=Han}/u)
+    expect(JSON.parse(userPrompt).scoringReference).toContain("Example seller-facing report")
+    expect(userPrompt).toContain("调用方原文")
+    expect(userPrompt.replace("调用方原文", "")).not.toMatch(/\p{Script=Han}/u)
   })
 
   it("实跑负分只复核异常项，图片扣分保留并统一已取证状态", () => {

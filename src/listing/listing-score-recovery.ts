@@ -1,3 +1,4 @@
+import { uiText } from "../common/i18n/request-language"
 import { BadGatewayException } from "@nestjs/common"
 import { parseListingJsonObject } from "./listing-result-parser"
 import { validateListingScoreOutput } from "./listing-score-validation"
@@ -17,7 +18,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function fail(): never {
-  throw new BadGatewayException("评分报告不完整，原始结果已保存，本次未扣费")
+  throw new BadGatewayException(uiText("评分报告不完整，原始结果已保存，本次未扣费", "The score report is incomplete. The original result was saved without a charge."))
 }
 
 /** 核心评分必须已经完整，不能靠修复模型补造分数或扣分依据。 */
@@ -132,14 +133,14 @@ export function validateRecoveredScore(
   const result = parseListingJsonObject(text)
   // 已完成字段原样保留，连模型的文字依据也不允许在修复时重写。
   if (Object.keys(core).some(key => canonical(core[key]) !== canonical(result[key]))) {
-    throw new BadGatewayException("评分修复改变了原始评分，结果已保留，本次未扣费")
+    throw new BadGatewayException(uiText("评分修复改变了原始评分，结果已保留，本次未扣费", "The repair changed the original score. The result was retained without a charge."))
   }
   if (
     Object.keys(result).some(
       key => !Object.hasOwn(core, key) && !["suggestions", "potential"].includes(key)
     )
   ) {
-    throw new BadGatewayException("评分修复新增了未经确认的字段，结果已保留，本次未扣费")
+    throw new BadGatewayException(uiText("评分修复新增了未经确认的字段，结果已保留，本次未扣费", "The repair added unrequested fields. The result was retained without a charge."))
   }
   return validateScoreReport(text, market)
 }

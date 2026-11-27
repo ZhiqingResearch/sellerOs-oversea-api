@@ -10,7 +10,7 @@ import { plainToInstance } from "class-transformer"
 import { validate } from "class-validator"
 import { randomUUID } from "node:crypto"
 import { beforeQuotaCharge } from "../../common/errors/upstream-quota"
-import { withOutputLanguage } from "../../common/i18n/ai-language"
+import { withListingOutputLanguage } from "../listing.prompts"
 import { uiText } from "../../common/i18n/request-language"
 import { AiGatewayProvider } from "../../common/providers/ai-gateway.provider"
 import { PrismaService } from "../../prisma/prisma.service"
@@ -27,7 +27,7 @@ import {
   type MatchCategoryDto,
   type PrepareAutomotiveDto,
 } from "./automotive.dto"
-import { automotiveGenerationPrompt, categoryPrompt, EXTRACTION_PROMPT } from "./automotive.prompts"
+import { automotiveGenerationPrompt, categoryPrompt, automotiveExtractionPrompt } from "./automotive.prompts"
 import {
   assertAutomotiveReady,
   finalizeAutomotive,
@@ -159,7 +159,7 @@ export class AutomotiveService {
     })
     try {
       const result = await beforeQuotaCharge(
-        this.gateway.generateJson<JsonRecord>(withOutputLanguage(system), prompt, {
+        this.gateway.generateJson<JsonRecord>(withListingOutputLanguage(system), prompt, {
           model,
           temperature: 0,
           maxAttempts: 1,
@@ -483,7 +483,7 @@ export class AutomotiveService {
         dto.runId,
         "input_analysis",
         model,
-        EXTRACTION_PROMPT,
+        automotiveExtractionPrompt(),
         JSON.stringify(sources),
         x =>
           Array.isArray(x?.candidates) &&
@@ -604,7 +604,7 @@ export class AutomotiveService {
           operation: "generation",
           model: prep.model as ListingAiModel,
           systemPrompt: automotiveGenerationPrompt(market, data),
-          userPrompt: `请根据确认资料生成一个完整汽配Listing JSON。本次临时敏感词尽量避用，不可修改真实品牌/OE：${JSON.stringify(sensitiveWords)}`,
+          userPrompt: "Generate the complete automotive listing JSON from the confirmed facts. Avoid the following sensitive terms where possible; preserve real brands and OE numbers: " + JSON.stringify(sensitiveWords),
           temperature: 0.2,
         },
         context: {

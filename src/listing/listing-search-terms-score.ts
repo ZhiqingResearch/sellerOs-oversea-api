@@ -4,6 +4,8 @@ import { formatListingScorePotential } from "./listing-cdq-summary"
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value)
 
+export const SEARCH_TERMS_UNAVAILABLE = ["SEARCH TERMS未获取", "Search terms unavailable"] as const
+
 /** 仅修正 Amazon 关键词第 4 项：未获取后台搜索词不能作为扣分依据。 */
 export function normalizeUnavailableSearchTerms<T>(value: T): T {
   if (!isRecord(value) || !Array.isArray(value.dimensions) || value.dimensions.length !== 4)
@@ -30,7 +32,7 @@ export function normalizeUnavailableSearchTerms<T>(value: T): T {
   // 保持原有 25 分权重及其他扣分，只退回本项因未获取而扣掉的分数。
   const score = Math.min(25, keywords.score + 4 - Number(criterion.score))
   const restoredScore = score - keywords.score
-  Object.assign(item, { status: "UNAVAILABLE", description: uiText("SEARCH TERMS未获取", "Search terms unavailable"), score: 4, deductions: [] })
+  Object.assign(item, { status: "UNAVAILABLE", description: uiText(...SEARCH_TERMS_UNAVAILABLE), score: 4, deductions: [] })
   dimension.score = score
   if (typeof report.total === "number" && Number.isFinite(report.total) &&
     !(Array.isArray(report.severeDefects) && report.severeDefects.length) &&

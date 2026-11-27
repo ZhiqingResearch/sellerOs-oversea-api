@@ -38,7 +38,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value)
 const normalizeText = (value: string): string => value.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase()
 const roundScore = (value: number): number => Math.round(value * 10000) / 10000
-const fail = (message: string): never => { throw new Error(`原文证据核验：${message}`) }
+const fail = (message: string): never => { throw new Error("Source evidence check: " + message) }
 
 /** 只读取专用结构化原文块，历史请求不强行猜测字段边界。 */
 export function parseListingScoreSource(userPrompt: string): ListingScoreSource | undefined {
@@ -71,46 +71,46 @@ export function parseListingScoreSource(userPrompt: string): ListingScoreSource 
 
 export function getListingEvidenceRequirement(dimensionIndex: number, criterionIndex: number, source?: ListingScoreSource): Record<string, unknown> | undefined {
   const key = `${dimensionIndex}:${criterionIndex}`
-  const common = "assessment中的quote/quotes必须摘录listing-scoring-source对应字段原文，保留精确词句；不能引用currentCriterion或其他评分结论。缺失项仍逐一列出，不能省略。field用title/itemHighlights/description/searchTerms/bullets.1（从1计数）。分数和扣分由程序计算。"
+  const common = "Copy quote/quotes exactly from the named listing-scoring-source field, never from currentCriterion or another score. Include misses. Use title, itemHighlights, description, searchTerms or bullets.1 (one-based). Compute scores and deductions from the supplied formula."
   if (key === "0:0" && source?.structuredAttributes?.length) return {
-    instructions: "属性原文为listing-scoring-source.structuredAttributes。请为全部实际属性逐一填写attributeChecks，index是原始数组从1开始的位置；ASIN、BSR、评论统计行不参与。正确与待确认的属性也逐条列出，不能只列扣分项、合并或重复索引。weight必须为JSON数字，按文档3/2/1，不要写数字字符串；errorType按矛盾→错位→单位→营销顺序命中即停，分辨不了填PENDING且建议补证。comparison只引用本次实际原文，field用title/itemHighlights/description/bullets.1/attributes.1。矛盾必须引用另一个同口径事实的实际原值，Printer等泛化品类不能用来证明型号矛盾；包数/件数错位必须引用实际包装层级。颜色矛盾必须引用另一处颜色原值（如实际Ink Colour），不能引用不包含颜色信息的型号/产品名短语。quote必须为原文连续片段，可取短但完整的型号或颜色，不用省略号、中文改写或自行拼接；例如不能在截断型号后添加原文不存在的“...”。中性产品描述用PRODUCT_DESCRIPTION，不能写MARKETING；页产量口径不明用PENDING。suggestion用卖家能操作的改法，直接说明当前字段建议填什么，不能只说“填写不规范”；有证据才建议具体替换值，待确认写明需补齐的事实。不在suggestion中写权重、扣除比例、模型判定等计算术语。程序按既有严重度生成严重/中等/待确认分组和折叠核算说明。所有权重分母、分值和描述由程序依据完整表统一计算，模型不得把失分份额或百分比直接填成扣分。此表复用可选assessment，旧客户端不提供原始属性时仍沿用既有接口。",
-    assessment: { attributeChecks: [{ index: 1, weight: 2, errorType: "NONE | CONTRADICTION | TYPE_MISMATCH | WRONG_FIELD | GRANULARITY | PRODUCT_DESCRIPTION | UNIT_MISMATCH | MISSING_UNIT | MARKETING | PENDING", comparison: [{ field: "原始字段，如attributes.2或bullets.1；无须比较时[]", quote: "同口径支持判断的真实原文" }], suggestion: "具体改法；NONE可为空；PENDING写待确认口径" }] },
-    formula: "W=全部非统计属性权重之和；扣除比例按类型固定100%/50%/0%；逐项扣分=30×weight×比例/W，score=30−逐项扣分合计。不得将总权重、总扣分或总体描述当成事实来源。",
+    instructions: "Return one attributeChecks row per actual structured attribute, using its one-based index. Exclude ASIN, BSR and review statistics. Include correct and pending rows without merging or duplicating indices. Use numeric weights 3/2/1. Take the first evidenced issue in contradiction, wrong field, unit, marketing order; use PENDING for unresolved issues. For comparison cite the actual title, itemHighlights, description, bullets.1 or attributes.1 value. Compare like with like: Printer is not evidence of incompatible models; a pack-count conflict needs package-level facts; a color conflict needs actual colors in both fields. Use exact, contiguous source excerpts without ellipses. A neutral product description is PRODUCT_DESCRIPTION, not MARKETING. An ambiguous Page Yield is PENDING. Give a specific, supported field change, or say which evidence is needed, in the requested interface language. Do not expose weights or calculate lost points as raw percentages. Use NONE for a correct field. Do not invent missing template attributes.",
+    assessment: { attributeChecks: [{ index: 1, weight: 2, errorType: "NONE | CONTRADICTION | TYPE_MISMATCH | WRONG_FIELD | GRANULARITY | PRODUCT_DESCRIPTION | UNIT_MISMATCH | MISSING_UNIT | MARKETING | PENDING", comparison: [{ field: "Source field such as attributes.2 or bullets.1; use [] for comparison when unnecessary", quote: "Exact source excerpt supporting the comparison" }], suggestion: "Actionable change; NONE may be empty, PENDING identifies what to verify" }] },
+    formula: "W=sum of all assessed non-statistical attribute weights. Deduction per item=30*weight*severity/W, with severity 100%, 50% or 0%. Score=30 minus the sum of deductions.",
   }
   if (key === "1:2") return {
-    instructions: common + "仅在Bullet、真实description、searchTerms核对长尾；标题和亮点不参与本项。先列全候选词（包括未覆盖词），有B/C关键词数据先按原规则排除跨品类词，否则依据行业推断。不得为提高得分缩减、替换同次冻结的候选词表。模型可提供field/quote，但程序会在允许原文字段中直接逐词匹配并重新生成field/quote；只命中标题或亮点不算覆盖。大小写、空格和标点差异归一，按完整词边界匹配。basis由实际是否提供B/C数据判定，不以模型标签为准。",
-    assessment: { basis: "provided | inferred", terms: [{ term: "候选长尾词", field: "bullets.1 | description | searchTerms | 空字符串", quote: "原文中包含该候选词的短语；未覆盖为空" }], excludedTerms: [{ term: "仅提供词表中的跨品类词", reason: "与当前产品不符的具体原因；无排除则[]" }] },
-    formula: "覆盖率=覆盖词数/候选词总数；得分=5×min(覆盖率/0.7,1)。不得因SEARCH TERMS未获取把其他字段的未覆盖词判已覆盖。",
+    instructions: common + "Check long-tail terms only in bullets, description and searchTerms. Include all candidates and misses. Exclude cross-category terms from provided B/C research; infer the candidates only when no such data is available. Do not shrink or replace the frozen list. Match complete terms with case, whitespace and punctuation normalized. The server verifies matches and assigns basis from the actual research provided.",
+    assessment: { basis: "provided | inferred", terms: [{ term: "Candidate long-tail keyword", field: "bullets.1 | description | searchTerms | empty string", quote: "Original phrase containing the term, empty if absent" }], excludedTerms: [{ term: "Cross-category term from the provided list only", reason: "Specific reason the term does not fit this product; use [] when there are no exclusions" }] },
+    formula: "Coverage=matched terms/all eligible terms. Score=5*min(coverage/0.7,1). Unavailable backend search terms do not turn a miss in other fields into a hit.",
   }
   if (key === "2:2") return {
-    instructions: common + "固定四类各列一次，quote为空表示该关系未覆盖。正向判断必须写出完整支持该关系的原文：IS_A支持产品身份/类型，USED_TO支持具体用途/动作，USED_BY支持具体使用者，USED_FOR_EVE支持具体事件/活动。仅产品名Ink不同时证明用途、使用者或事件，不能将同一无关产品名复用到多类关系。若一段原文包含多类关系，分别摘出各自有实义的不同片段；不同关系不得复用完全相同的quote。不能把推断关系的中文解释充当原文。",
-    assessment: { relations: MEDIUM_RELATIONS.map(type => ({ type, field: "实际原文字段，未覆盖为空", quote: "支持该关系的原文，未覆盖为空" })) },
-    formula: "已覆盖关系数≥3得4分；低于3时每缺一类扣1.5，最低0，即max(0,4-1.5×max(0,3-覆盖数))。",
+    instructions: common + "List each of the four relation types exactly once. Use an empty quote for an uncovered relationship. For IS_A cite the product identity; for USED_TO cite a specific purpose or action; for USED_BY cite a specific user; for USED_FOR_EVE cite an occasion or activity. Ink alone does not prove all four. Use distinct, meaningful excerpts for distinct relationships without paraphrasing evidence.",
+    assessment: { relations: MEDIUM_RELATIONS.map(type => ({ type, field: "Actual source field, empty when uncovered", quote: "Verbatim evidence for this relationship, empty when uncovered" })) },
+    formula: "At least three covered relations earn 4. Otherwise score=max(0,4-1.5*max(0,3-covered count)).",
   }
   if (key === "3:1") return {
-    instructions: common + "按实际全部N条分别核验，index从1开始、每条一次。合格quote只引用该条的具名规格/认证/数字指标本身，kind=numeric/specification/certification；不合格quote为空、kind为空。明确兼容型号（如ET-2850）是具名规格、明确24/7服务时间是数字指标，不能只认容量/页数而漏掉它们。不得借用别条的数据；premium/best/high-quality、rigorous testing、dozens等泛称不是可验证数据点，不能用整条营销文案代替具体数据点。无数字的具名规格/认证可用specification/certification，不能虚构准入条件。",
-    assessment: { bullets: [{ index: 1, kind: "numeric | specification | certification | 空字符串", quote: "本条的具体数据点原文，不合格为空" }] },
-    formula: "standard得分=5×合格条数/N，N=0时0分；custom固定按6条基准：得分=min(5,5×合格条数/6)，即使实际输入不是6条也不得改用实际N作分母。两种模式均须逐条核验全部实际输入。",
+    instructions: common + "Assess all N bullets once each, with one-based indices. For a qualifying bullet quote the exact numerical fact, named specification or certification within that bullet. ET-2850 can be a model specification and 24/7 support is a measurable service duration. Exclude vague claims such as premium, rigorous testing and dozens. For a miss use empty kind and quote. Do not borrow facts from another bullet.",
+    assessment: { bullets: [{ index: 1, kind: "numeric | specification | certification | empty string", quote: "Exact data point from this bullet, empty when unqualified" }] },
+    formula: "Standard: 5 × qualifying bullets / N (zero if N=0). Custom: min(5, 5 × qualifying bullets / 6), even when N differs from six. Evaluate every supplied bullet.",
   }
   if (key === "3:2") return {
-    instructions: common + "只能使用真实description原文，不得借用标题、Bullet、结构化属性或页面摘要。必须分别列两类检查。specifications有规格段时引用规格段字段和具体值（原文字段:值或HTML表格字段值），不能只引excellent等形容词；overview_scenes有至少两个具体场景时分别引用不同且不重叠的完整场景原文短语，不能把一句话拆成My ink与ink is伪装成两个场景。不能把同一场景换句式重复计算。未满足检查时isPresent=false且quotes=[]。不另增格式、段数或措辞扣分。",
-    assessment: { checks: DESCRIPTION_CHECKS.map(checkId => ({ checkId, isPresent: "boolean", quotes: ["该检查的原文证据；未满足时[]"] })) },
-    formula: "满分3；缺规格段扣1，PRODUCT OVERVIEW缺场景扣1，分别计算、每类仅一次。",
+    instructions: common + "Check only the actual description. For specifications cite a field plus its value (including HTML table cells); adjectives alone are insufficient. For overview_scenes cite at least two distinct non-overlapping complete use cases. Do not split one phrase into artificial scenes or count paraphrases twice. A missing check has isPresent=false and quotes=[]. Do not deduct for extra format or wording requirements.",
+    assessment: { checks: DESCRIPTION_CHECKS.map(checkId => ({ checkId, isPresent: "boolean", quotes: ["Verbatim evidence for this check; [] when absent"] })) },
+    formula: "Maximum 3. Deduct 1 for missing specifications and 1 for missing overview scenes, each at most once.",
   }
   return undefined
 }
 
 function getFieldText(source: ListingScoreSource, field: unknown): string {
-  if (typeof field !== "string") return fail("field必须为原文字段名")
+  if (typeof field !== "string") return fail("field must identify an original source field")
   if (["title", "itemHighlights", "description", "searchTerms"].includes(field)) return source[field as "title" | "itemHighlights" | "description" | "searchTerms"]
   const match = /^bullets\.(\d+)$/.exec(field)
   if (match && Number(match[1]) >= 1 && Number(match[1]) <= source.bullets.length) return source.bullets[Number(match[1]) - 1]
-  return fail(`未知证据字段${field}`)
+  return fail(`Unknown evidence field: ${field}`)
 }
 
 function validateQuote(source: ListingScoreSource, field: unknown, quote: unknown): string {
-  if (typeof quote !== "string" || !quote.trim()) return fail(`field=${String(field)}的正向判断必须提供非空原文引用`)
-  if (!normalizeText(getFieldText(source, field)).includes(normalizeText(quote))) return fail(`${String(field)}不包含引用“${quote}”，禁止跨字段或虚构证据`)
+  if (typeof quote !== "string" || !quote.trim()) return fail(`A positive finding for ${String(field)} needs a nonempty source quotation`)
+  if (!normalizeText(getFieldText(source, field)).includes(normalizeText(quote))) return fail(`${String(field)} does not contain the quote "${quote}"; cite the actual field`)
   return quote.trim()
 }
 
@@ -126,7 +126,7 @@ function resolveRelationQuote(source: ListingScoreSource, field: unknown, quote:
 
 function getEntries(assessment: Record<string, unknown>, name: string): Record<string, unknown>[] {
   const entries = assessment[name]
-  if (!Array.isArray(entries) || entries.some(item => !isRecord(item))) return fail(`assessment.${name}必须为逐项对象数组`)
+  if (!Array.isArray(entries) || entries.some(item => !isRecord(item))) return fail(`assessment.${name} must be an array of per-item objects`)
   return entries as Record<string, unknown>[]
 }
 
@@ -146,7 +146,7 @@ const normalizeKeyword = (value: string): string => getKeywordTokens(value).map(
 /** 关键词覆盖为文本事实：只在原规则允许的字段内匹配，不依赖模型填写field/quote。 */
 function findLongtailEvidence(source: ListingScoreSource, term: string): { field: string; quote: string } {
   const expected = getKeywordTokens(term).map(token => token.text)
-  if (!expected.length) return fail(`长尾候选词“${term}”不包含有效词项`)
+  if (!expected.length) return fail(`The long-tail candidate "${term}" contains no valid tokens`)
   const fields = [
     ...source.bullets.map((text, index) => ({ field: `bullets.${index + 1}`, text })),
     { field: "description", text: source.description },
@@ -166,13 +166,13 @@ function findLongtailEvidence(source: ListingScoreSource, term: string): { field
 /** 候选分区先于命中核验，防止把首轮遗漏的provided分母永久冻结。 */
 function getLongtailCandidatePlan(assessment: Record<string, unknown>, source: ListingScoreSource): { terms: string[]; basis: string } {
   const entries = getEntries(assessment, "terms")
-  if (!entries.length) return fail("长尾须提供包含未覆盖词的非空候选词表")
+  if (!entries.length) return fail("Provide the complete nonempty candidate list including uncovered terms")
   const terms: string[] = [], seen = new Set<string>()
   for (const item of entries) {
-    if (typeof item.term !== "string" || !item.term.trim()) return fail("长尾候选词不能为空")
+    if (typeof item.term !== "string" || !item.term.trim()) return fail("A long-tail candidate cannot be empty")
     const term = normalizeKeyword(item.term)
-    if (!term) return fail(`长尾候选词“${item.term}”不包含有效词项`)
-    if (seen.has(term)) return fail(`长尾词${item.term}重复`)
+    if (!term) return fail(`The long-tail candidate "${item.term}" contains no valid tokens`)
+    if (seen.has(term)) return fail(`Duplicate long-tail term: ${item.term}`)
     seen.add(term)
     terms.push(item.term.trim())
   }
@@ -182,9 +182,9 @@ function getLongtailCandidatePlan(assessment: Record<string, unknown>, source: L
   const excluded = assessment.excludedTerms === undefined ? [] : getEntries(assessment, "excludedTerms")
   const excludedKeys = new Set<string>()
   for (const item of excluded) {
-    if (typeof item.term !== "string" || typeof item.reason !== "string" || !item.reason.trim()) return fail("跨品类排除词必须提供具体term和reason")
+    if (typeof item.term !== "string" || typeof item.reason !== "string" || !item.reason.trim()) return fail("Each cross-category exclusion needs a specific term and reason")
     const term = normalizeKeyword(item.term)
-    if (!providedKeys.has(term) || seen.has(term) || excludedKeys.has(term)) return fail(`跨品类排除词“${item.term}”必须来自提供词表、不得与候选词重复`)
+    if (!providedKeys.has(term) || seen.has(term) || excludedKeys.has(term)) return fail(`Excluded term "${item.term}" must be in the supplied research and distinct from the candidates`)
     excludedKeys.add(term)
   }
   // <3阈值针对整个S/A/B/C词库；长尾分母只取其中未被明确排除的B/C。
@@ -192,11 +192,11 @@ function getLongtailCandidatePlan(assessment: Record<string, unknown>, source: L
   const remaining = [...providedLongtailKeys].filter(term => !excludedKeys.has(term))
   const isUsingProvided = remaining.length > 0 && availableCount >= 3
   if (isUsingProvided && (remaining.some(term => !seen.has(term)) || [...seen].some(term => !remaining.includes(term)))) {
-    return fail("provided模式必须逐一核对提供的B/C词表，未覆盖词不能省略；跨品类词须说明排除原因")
+    return fail("Check every provided B/C term, retain misses and explain cross-category exclusions")
   }
   if (source.longtailTerms) {
     const expected = new Set(source.longtailTerms.map(normalizeKeyword))
-    if (expected.size !== seen.size || [...expected].some(term => !seen.has(term))) return fail("长尾候选词与本次冻结词表不一致，不得删除未覆盖词或替换分母")
+    if (expected.size !== seen.size || [...expected].some(term => !seen.has(term))) return fail("The candidate list differs from the frozen set. Keep all misses and the original denominator")
   }
   return { terms, basis: isUsingProvided ? "provided" : "inferred" }
 }
@@ -224,23 +224,23 @@ function projectLongtail(assessment: Record<string, unknown>, source: ListingSco
 
 function projectMediumRelations(assessment: Record<string, unknown>, source: ListingScoreSource): ListingEvidenceProjection {
   const relations = getEntries(assessment, "relations")
-  if (relations.length !== MEDIUM_RELATIONS.length) return fail("中优先级关系必须完整列出四类")
+  if (relations.length !== MEDIUM_RELATIONS.length) return fail("Include all four medium-priority relations")
   const seen = new Set<string>(), quotedRelations = new Set<string>(), covered: string[] = [], missing: string[] = []
   const normalizedRelations: Record<string, unknown>[] = []
   for (const item of relations) {
-    if (typeof item.type !== "string" || !MEDIUM_RELATIONS.includes(item.type) || seen.has(item.type)) return fail("中优先级关系类型非法或重复")
+    if (typeof item.type !== "string" || !MEDIUM_RELATIONS.includes(item.type) || seen.has(item.type)) return fail("Invalid or duplicate medium-priority relation")
     seen.add(item.type)
-    if (typeof item.quote !== "string") return fail(`${item.type}缺少quote，未覆盖须明确为空`)
+    if (typeof item.quote !== "string") return fail(`${item.type} is missing quote; use an empty string for a miss`)
     if (item.quote.trim()) {
       const evidence = resolveRelationQuote(source, item.field, item.quote)
       const quote = evidence.quote
       normalizedRelations.push({ ...item, ...evidence })
       const quoteKey = normalizeKeyword(quote)
-      if (quotedRelations.has(quoteKey)) return fail(`COSMO ${item.type}复用了相同证据“${quote}”，须分别摘出支持产品类型/用途/使用者/事件的原文片段`)
+      if (quotedRelations.has(quoteKey)) return fail(`COSMO ${item.type} reuses "${quote}". Cite distinct evidence for identity, action, user and occasion`)
       quotedRelations.add(quoteKey)
       covered.push(item.type)
     } else {
-      if (item.field !== "") return fail(`${item.type}未覆盖时field必须为空`)
+      if (item.field !== "") return fail(`field must be empty for the uncovered relation ${item.type}`)
       normalizedRelations.push({ ...item })
       missing.push(item.type)
     }
@@ -251,31 +251,31 @@ function projectMediumRelations(assessment: Record<string, unknown>, source: Lis
 }
 
 function validateBulletDataPoint(kind: unknown, quote: string): void {
-  if (!["numeric", "specification", "certification"].includes(String(kind))) return fail("合格Bullet必须标记numeric/specification/certification")
+  if (!["numeric", "specification", "certification"].includes(String(kind))) return fail("A qualifying bullet requires numeric, specification or certification")
   const text = normalizeText(quote)
-  if (kind === "numeric" && !/\d/.test(text)) return fail("numeric证据必须包含原文实际数字，不能把dozens等泛称当数字指标")
+  if (kind === "numeric" && !/\d/.test(text)) return fail("Numeric evidence must contain an actual number. Vague quantities such as dozens do not qualify")
   // 仅排除原规则明确不承认可验证数据的空泛话术，不另列产品规格白名单。
   if (/^(?:premium|best|high[- ]quality|superior quality|professional quality|rigorous (?:quality )?testing|quality testing|consistent[, ]+reliable performance|reliable performance|strict (?:shipping )?tests?|dozens(?: of)?(?: strict)?(?: shipping)?(?: tests?)?|优质|高品质|严格(?:质量)?测试|品质保证)[.!。\s]*$/i.test(text))
-    return fail("泛化质量或测试话术不是具名规格、认证或数字指标")
+    return fail("Generic quality or testing claims are not named specifications, certifications or metrics")
   if (kind !== "numeric" && !/\d/.test(text) && /(?:every (?:bottle|page)|your (?:work|satisfaction)|our (?:commitment|standard)|rigorous (?:quality )?testing|quality you can trust|colors that pop|professionally polished|fade-resistant colors|razor-sharp text|dozens of)/i.test(text))
-    return fail("引用的是整条营销或质量描述，须只引用具体具名规格/认证，不能据此判为合格")
+    return fail("Quote only the specific specification or certification, not an entire promotional bullet")
 }
 
 function projectBulletData(assessment: Record<string, unknown>, source: ListingScoreSource): ListingEvidenceProjection {
   const bullets = getEntries(assessment, "bullets")
-  if (bullets.length !== source.bullets.length) return fail(`Bullet必须完整评估实际${source.bullets.length}条，不能漏条、合并或按固定5条评分`)
+  if (bullets.length !== source.bullets.length) return fail(`Assess all ${source.bullets.length} bullets once, without omission or merging`)
   const seen = new Set<number>(), qualified: number[] = [], unqualified: number[] = []
   const normalizedBullets: Record<string, unknown>[] = []
   for (const item of bullets) {
-    if (!Number.isSafeInteger(item.index) || Number(item.index) < 1 || Number(item.index) > source.bullets.length || seen.has(Number(item.index))) return fail("Bullet索引必须从1开始、逐条唯一且不越界")
+    if (!Number.isSafeInteger(item.index) || Number(item.index) < 1 || Number(item.index) > source.bullets.length || seen.has(Number(item.index))) return fail("Bullet indices must be unique and between 1 and the actual count")
     const index = Number(item.index)
     seen.add(index)
-    if (typeof item.quote !== "string") return fail(`Bullet ${index}缺少quote，不合格也须明确为空`)
+    if (typeof item.quote !== "string") return fail(`Bullet ${index} needs quote; use an empty string for a miss`)
     const explicit = !item.quote.trim() ? findListingBulletDataPoint(source.bullets[index - 1]) : undefined
     const normalized = explicit ? { ...item, ...explicit } : item
     normalizedBullets.push(normalized)
     if (!(normalized.quote as string).trim()) {
-      if (item.kind !== "" && item.kind !== undefined) return fail(`Bullet ${index}未提供数据点时kind必须为空`)
+      if (item.kind !== "" && item.kind !== undefined) return fail(`Bullet ${index} needs an empty kind when there is no data point`)
       unqualified.push(index)
     } else {
       const quote = validateQuote(source, `bullets.${index}`, normalized.quote)
@@ -325,21 +325,21 @@ function hasSeparateSceneQuotes(description: string, quotes: string[]): boolean 
 
 function projectDescription(assessment: Record<string, unknown>, source: ListingScoreSource): ListingEvidenceProjection {
   const checks = getEntries(assessment, "checks")
-  if (checks.length !== DESCRIPTION_CHECKS.length) return fail("描述必须分别检查specifications与overview_scenes")
+  if (checks.length !== DESCRIPTION_CHECKS.length) return fail("Check specifications and overview_scenes separately")
   const seen = new Set<string>(), deductions: EvidenceDeduction[] = [], states: string[] = []
   for (const item of checks) {
-    if (typeof item.checkId !== "string" || !DESCRIPTION_CHECKS.includes(item.checkId) || seen.has(item.checkId) || typeof item.isPresent !== "boolean" || !Array.isArray(item.quotes) || item.quotes.some(quote => typeof quote !== "string")) return fail("描述检查必须为两个唯一checkId，并含isPresent布尔值与quotes数组")
+    if (typeof item.checkId !== "string" || !DESCRIPTION_CHECKS.includes(item.checkId) || seen.has(item.checkId) || typeof item.isPresent !== "boolean" || !Array.isArray(item.quotes) || item.quotes.some(quote => typeof quote !== "string")) return fail("Provide both unique checkIds, each with a boolean isPresent and a quotes array")
     seen.add(item.checkId)
     const name = item.checkId === "specifications" ? uiText("结构化规格段", "Structured specifications section") : uiText("PRODUCT OVERVIEW具体场景", "Specific PRODUCT OVERVIEW use cases")
     if (item.isPresent) {
       const quotes = (item.quotes as string[]).map(quote => validateQuote(source, "description", quote))
       const quoteKeys = new Set(quotes.map(normalizeText))
-      if (quotes.length !== quoteKeys.size || quotes.length < (item.checkId === "overview_scenes" ? 2 : 1)) return fail(`${name}必须提供${item.checkId === "overview_scenes" ? "至少两个不同场景" : "至少一个规格字段和值"}的原文证据`)
-      if (item.checkId === "specifications" && !quotes.some(hasSpecificationStructure)) return fail("specifications证据须含真实字段:值或HTML表格字段值，形容词和场景句不等于规格段")
-      if (item.checkId === "overview_scenes" && !hasSeparateSceneQuotes(source.description, quotes)) return fail("overview_scenes必须引用两个不同且不互相包含、重叠的完整场景，不能拆词凑场景")
+      if (quotes.length !== quoteKeys.size || quotes.length < (item.checkId === "overview_scenes" ? 2 : 1)) return fail(`${item.checkId} needs ${item.checkId === "overview_scenes" ? "two distinct source scenes" : "a source specification field and its value"}`)
+      if (item.checkId === "specifications" && !quotes.some(hasSpecificationStructure)) return fail("Cite a field and value in the description text or HTML table for specifications")
+      if (item.checkId === "overview_scenes" && !hasSeparateSceneQuotes(source.description, quotes)) return fail("Quote two complete distinct non-overlapping scenes for overview_scenes")
       states.push(uiText(`${name}已核验`, `${name} verified`))
     } else {
-      if (item.quotes.length) return fail(`${name}未满足时quotes必须为空，不能携带已通过证据`)
+      if (item.quotes.length) return fail(`For an unmet ${name} check, quotes must be empty`)
       states.push(uiText(`${name}缺失`, `${name} missing`))
       deductions.push({ ruleId: "alexa.description", checkId: item.checkId, points: 1, reason: uiText(`缺少${name}`, `Missing ${name}`), evidence: source.description.trim() ? uiText(`description逐项核验：未确认${name}；不得以Bullet或页面摘要代替描述。`, `Description check: ${name} not verified; bullets or page summaries cannot substitute for the description.`) : uiText("description为空，未提供独立产品描述。", "Description is empty; no standalone product description was provided.") })
     }
@@ -361,7 +361,7 @@ export function projectListingCriterionEvidence(
   if (key === "3:2" && !source.description.trim()) return projectDescription({
     checks: DESCRIPTION_CHECKS.map(checkId => ({ checkId, isPresent: false, quotes: [] })),
   }, source)
-  if (!isRecord(criterion.assessment)) return fail(`${key}缺少assessment；满分也必须逐项提交原文证据，不能只清空deductions`)
+  if (!isRecord(criterion.assessment)) return fail(`Missing assessment for ${key}. Include item-level evidence even for full marks`)
   if (key === "1:2") return projectLongtail(criterion.assessment, source)
   if (key === "2:2") return projectMediumRelations(criterion.assessment, source)
   if (key === "3:1") return projectBulletData(criterion.assessment, source)
@@ -376,7 +376,7 @@ export function getListingEvidenceError(
 ): string | null {
   try {
     const projected = projectListingCriterionEvidence(dimensionIndex, criterionIndex, criterion, source)
-    if (projected && (typeof criterion.score !== "number" || Math.abs(projected.score - criterion.score) > 0.0001)) return "评分与逐项原文证据计算结果不一致，须采用程序投影分数"
+    if (projected && (typeof criterion.score !== "number" || Math.abs(projected.score - criterion.score) > 0.0001)) return "Use the score calculated from the individual source checks."
     return null
   } catch (error) { return error instanceof Error ? error.message : String(error) }
 }

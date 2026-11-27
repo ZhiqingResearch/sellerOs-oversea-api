@@ -162,8 +162,8 @@ it("原始属性可取得时漏表不能锁为成功，反馈缺失索引后按�
   const first = acceptScoreCorrectionProgress(JSON.stringify({ corrections: [incomplete, titleCorrection()] }), plan, "amazon_us", context)
   expect(first.acceptedCriteria).toEqual([{ dimensionIndex: 0, criterionIndex: 1 }])
   expect(first.plan.criteria).toEqual([{ dimensionIndex: 0, criterionIndex: 0 }])
-  expect(first.validationErrors[0]).toContain("缺失索引[2]")
-  expect(first.validationErrors[0]).toContain("索引[1,2]")
+  expect(first.validationErrors[0]).toContain("Missing indices: 2")
+  expect(first.validationErrors[0]).toContain("indices [1,2]")
   expect(first.plan.report.dimensions[0].criteria[0]).toEqual(plan.report.dimensions[0].criteria[0])
   const second = acceptScoreCorrectionProgress(JSON.stringify({ corrections: [{
     ...incomplete, assessment: { attributeChecks: [check(1), check(2)] },
@@ -263,7 +263,7 @@ it("不同证据或分值以及尚未核验的子项不能被跨层去重吞掉"
     expect(progress.acceptedDimensions).toEqual([])
     expect(progress.plan.dimensionIndices).toEqual([1])
     expect(progress.plan.report).toEqual(plan.report)
-    expect(progress.validationErrors.join("\n")).toContain("维度额外扣分必须属于原有规则")
+    expect(progress.validationErrors.join("\n")).toContain("Each dimension penalty must cite an allowed rule")
   }
 })
 
@@ -275,6 +275,6 @@ it("维度校对提示明确原有唯一允许规则并禁止再次复制子项�
   const expected = [{ "keyword.titleLength": 10 }, {}, { "alexa.stuffing": 5 }]
   expect(payload.dimensionEvidence.map((item: { allowedRules: Record<string, number> }) => item.allowedRules)).toEqual(expected)
   expect(payload.expectedOutput.dimensionCorrections.map((item: { allowedRules: Record<string, number> }) => item.allowedRules)).toEqual(expected)
-  expect(payload.dimensionEvidence[0].instructions).toContain("不得再次复制到维度层")
-  expect(request.systemPrompt).toContain("不能复制到维度层重复扣分")
+  expect(payload.dimensionEvidence[0].instructions).toContain("Exclude deductions already counted in criteria")
+  expect(request.systemPrompt).toContain("without duplicating criterion deductions")
 })

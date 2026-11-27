@@ -1,6 +1,8 @@
 import { ConflictException } from "@nestjs/common"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
+import { withUiLanguage } from "../../common/i18n/request-language"
+import { automotiveExtractionPrompt, automotiveGenerationPrompt, categoryPrompt } from "./automotive.prompts"
 import { ListingGenerationService } from "../listing-generation.service"
 import { parseListingScoreSource } from "../listing-score-evidence"
 import { buildAutomotiveScoreRequest } from "./automotive-scoring"
@@ -122,6 +124,21 @@ function existingScoreFixture(f: ReturnType<typeof ready>) {
 }
 
 describe("汽配复用原评分链路", () => {
+  it.each(["en-US", "zh-CN"] as const)("%s 汽配生成与后台评分使用英文指令和保存的输出语言", async locale => {
+    const f = ready()
+    f.task.input.responseLanguage = locale
+    const prompts = withUiLanguage(locale, () => [
+      categoryPrompt("amazon_us"), automotiveExtractionPrompt(), automotiveGenerationPrompt("amazon_us", data),
+    ])
+    await withUiLanguage(locale === "en-US" ? "zh-CN" : "en-US", () => f.service.finalizeAutomotiveTask(f.task))
+    const request = f.task.input.autoScore
+    for (const prompt of [...prompts, request.systemPrompt, request.userPrompt]) {
+      expect(prompt).not.toMatch(/\p{Script=Han}/u)
+    }
+    expect(request.systemPrompt).toContain(locale === "en-US" ? "Use English" : "Use Simplified Chinese")
+    expect(parseListingScoreSource(request.userPrompt)?.title).toBe(body().title)
+  })
+
   it("自检通过只认领一次评分，不调用AI或提前扣费", async () => {
     const f = ready()
     await f.service.finalizeAutomotiveTask(f.task)
@@ -295,8 +312,8 @@ it("汽配评分沿用标准评分原文和字段证据契约，安全保留完�
     description: result.description,
     structuredAttributes: result.structuredAttributes,
   })
-  expect(request.systemPrompt).toContain("已加载 references/score-cdq-standard.md")
-  expect(request.userPrompt).toContain("未提供本次图片")
+  expect(request.systemPrompt).toContain("Loaded references/score-cdq-standard.md")
+  expect(request.userPrompt).toContain("Images, A+ content, the parent variation matrix and keyword research were not supplied")
   expect(request.userPrompt).not.toContain("<b>")
   expect(request.images).toBeUndefined()
   expect(request.operation).toBe("score")

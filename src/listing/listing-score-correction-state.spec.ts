@@ -121,8 +121,8 @@ describe("已知CDQ合同中的缺失字段进入局部校对", () => {
     const plan = buildScoreCorrectionPlan(JSON.stringify(report), "amazon_us", true)!
     expect(plan.pendingTailFields).toEqual(["suggestions", "potential"])
     const correctionRequest = buildScoreCorrectionRequest("规则", "原文", plan)
-    expect(correctionRequest.systemPrompt).toContain("仅当pendingTailFields包含suggestions")
-    expect(correctionRequest.systemPrompt).toContain("按本次校对后确认的扣分给出建议")
+    expect(correctionRequest.systemPrompt).toContain("Only include suggestions when requested in pendingTailFields")
+    expect(correctionRequest.systemPrompt).toContain("based on verified deductions")
     expect(correctionRequest.systemPrompt).not.toContain("不返回建议、完整报告")
     const request = JSON.parse(correctionRequest.userPrompt)
     expect(request.expectedOutput.suggestions).toBeDefined()
@@ -162,7 +162,7 @@ it("未请求尾部时保留原建议并拒绝模型额外改写", () => {
   const patch = { corrections: [{ dimensionIndex: 0, criterionIndex: 1, score: 25, status: "VERIFIED", description: "标题已核验", deductions: [] }] }
   const request = buildScoreCorrectionRequest("规则", "原文", plan)
   expect(JSON.parse(request.userPrompt).expectedOutput.suggestions).toBeUndefined()
-  expect(request.systemPrompt).toContain("未请求suggestions时不得返回或修改原建议")
+  expect(request.systemPrompt).toContain("Leave all other fields and potential to the server")
   expect(JSON.parse(mergeScoreCorrection(JSON.stringify(patch), plan, "amazon_us", true)).suggestions).toEqual(report.suggestions)
   expect(() => mergeScoreCorrection(JSON.stringify({ ...patch, suggestions: ["新增建议"] }), plan, "amazon_us", true)).toThrow("返回格式")
 })

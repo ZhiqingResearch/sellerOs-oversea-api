@@ -1,3 +1,4 @@
+import { uiText } from "../common/i18n/request-language"
 import { jsonrepair } from "jsonrepair"
 const parseLlmJson = <T>(text: string): T => JSON.parse(jsonrepair(text)) as T
 
@@ -7,7 +8,7 @@ const parseLlmJson = <T>(text: string): T => JSON.parse(jsonrepair(text)) as T
  */
 export function parseListingJsonObject(text: string): Record<string, unknown> {
   const start = text.indexOf("{")
-  if (start < 0) throw new Error("模型未返回 Listing 结构化内容，原始响应已保留")
+  if (start < 0) throw new Error(uiText("模型未返回 Listing 结构化内容，原始响应已保留", "No structured listing object was returned. The original response was retained."))
   const stack: string[] = []
   let quote: string | null = null
   let isEscaped = false
@@ -48,11 +49,11 @@ export function parseListingJsonObject(text: string): Record<string, unknown> {
       if (stack.length === 0) {
         const parsed = parseLlmJson<unknown>(text.slice(start, index + 1))
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-          throw new Error("Listing 响应不是有效的对象")
+          throw new Error(uiText("Listing 响应不是有效的对象", "The listing response is not a valid object."))
         }
         return parsed as Record<string, unknown>
       }
     }
   }
-  throw new Error("Listing 响应不完整，未自动补写内容或重新请求 AI，原始响应已保留")
+  throw new Error(uiText("Listing 响应不完整，未自动补写内容或重新请求 AI，原始响应已保留", "The listing response is incomplete. The original response was retained."))
 }

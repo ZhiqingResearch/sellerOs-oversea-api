@@ -81,8 +81,8 @@ describe("属性评分按既定规则计算，完整报告正常交付", () => {
   })
   it("首次调用即要求逐项判断，推荐未填只给建议", () => {
     const prompt = buildListingScoreSystemPrompt("评分", `<listing-scoring-source>${JSON.stringify(sourceFacts)}</listing-scoring-source>`)
-    expect(prompt).toContain("首次回答请完整填写assessment.attributeChecks")
-    expect(prompt).toContain("不生成扣分")
-    expect(prompt).toContain("不得一边写填写规范一边以完整度为由扣分")
+    expect(prompt).toContain("Return one attributeChecks row per actual structured attribute")
+    expect(prompt).toContain("Missing recommended fields carry no deduction")
+    expect(prompt).toContain("Compute the score, description and deductions from the same assessment")
   })
 })

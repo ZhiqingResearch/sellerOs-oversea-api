@@ -69,7 +69,7 @@ describe("Listing 非CDQ原文证据", () => {
       const assessment = { bullets: source.bullets.map((quote, index) => ({ index: index + 1, kind: "numeric", quote })) }
       expect(projectListingCriterionEvidence(3, 1, { assessment }, source)?.score).toBe(count === 4 ? 3.3333 : 5)
       assessment.bullets.pop()
-      expect(() => projectListingCriterionEvidence(3, 1, { assessment }, source)).toThrow(`完整评估实际${count}条`)
+      expect(() => projectListingCriterionEvidence(3, 1, { assessment }, source)).toThrow(`Assess all ${count} bullets`)
     }
   })
   it("旧请求无专用证据块时保留兼容，不猜测整段产品描述", () => {
@@ -83,7 +83,7 @@ describe("Listing 非CDQ原文证据", () => {
     expect(projectListingCriterionEvidence(1, 3, { score: 4 }, createSource())).toBeUndefined()
     for (const [dimensionIndex, criterionIndex] of [[1, 2], [2, 2], [3, 1], [3, 2]]) {
       expect(getListingEvidenceRequirement(dimensionIndex, criterionIndex)).toBeDefined()
-      expect(getListingEvidenceError(dimensionIndex, criterionIndex, { score: 5 }, { ...createSource(), description: "Independent product description." })).toContain("缺少assessment")
+      expect(getListingEvidenceError(dimensionIndex, criterionIndex, { score: 5 }, { ...createSource(), description: "Independent product description." })).toContain("Missing assessment")
     }
   })
 
@@ -94,7 +94,7 @@ describe("Listing 非CDQ原文证据", () => {
     expect(result.deductions).toEqual([expect.objectContaining({ ruleId: "alexa.bulletData", points: 2.1429 })])
     expect(result.description).toContain("合格4条（1、2、3、7）")
     expect(result.description).toContain("4、5、6")
-    expect(getListingEvidenceError(3, 1, { score: 5, assessment }, createSource())).toContain("不一致")
+    expect(getListingEvidenceError(3, 1, { score: 5, assessment }, createSource())).toContain("Use the score calculated")
     expect(getListingEvidenceError(3, 1, result, createSource())).toBeNull()
   })
 
@@ -127,14 +127,14 @@ describe("Listing 非CDQ原文证据", () => {
   it("已有模型引用仍须原文验证，无数字具名规格与认证不由本地猜判", () => {
     const source = { ...createSource(), bullets: ["Material: stainless steel; FCC certified.", "17000 pages"] }
     const assessment = { bullets: [{ index: 1, kind: "", quote: "" }, { index: 2, kind: "numeric", quote: "6500 pages" }] }
-    expect(() => projectListingCriterionEvidence(3, 1, { assessment }, source)).toThrow("bullets.2不包含引用")
+    expect(() => projectListingCriterionEvidence(3, 1, { assessment }, source)).toThrow("bullets.2 does not contain the quote")
     assessment.bullets[1].quote = "17000 pages"
     expect(projectListingCriterionEvidence(3, 1, { assessment }, source)?.score).toBe(2.5)
   })
   it("不能把其他Bullet的数据借给第5/6条", () => {
     const assessment = createBullets()
     assessment.bullets[4] = { index: 5, kind: "numeric", quote: "17000 pages" }
-    expect(() => projectListingCriterionEvidence(3, 1, { assessment }, createSource())).toThrow("bullets.5不包含引用")
+    expect(() => projectListingCriterionEvidence(3, 1, { assessment }, createSource())).toThrow("bullets.5 does not contain the quote")
   })
 
   it.each([
@@ -146,7 +146,7 @@ describe("Listing 非CDQ原文证据", () => {
   ])("第%s条%s泛化引文不能作为合格数据点：%s", (index, kind, quote) => {
     const assessment = createBullets()
     assessment.bullets[Number(index) - 1] = { index: Number(index), kind: String(kind), quote: String(quote) }
-    expect(() => projectListingCriterionEvidence(3, 1, { assessment }, createSource())).toThrow("原文证据核验")
+    expect(() => projectListingCriterionEvidence(3, 1, { assessment }, createSource())).toThrow("Source evidence check")
   })
 
   it("没有数字的具名规格/认证仍可取证，不新增数字准入限制", () => {
@@ -159,9 +159,9 @@ describe("Listing 非CDQ原文证据", () => {
   it("漏条、重复条均触发补事实，不补成不合格或满分", () => {
     const assessment = createBullets()
     assessment.bullets.pop()
-    expect(() => projectListingCriterionEvidence(3, 1, { assessment }, createSource())).toThrow("完整评估实际7条")
+    expect(() => projectListingCriterionEvidence(3, 1, { assessment }, createSource())).toThrow("Assess all 7 bullets")
     assessment.bullets.push({ index: 1, kind: "numeric", quote: "ET-2850" })
-    expect(() => projectListingCriterionEvidence(3, 1, { assessment }, createSource())).toThrow("索引")
+    expect(() => projectListingCriterionEvidence(3, 1, { assessment }, createSource())).toThrow("Bullet indices")
   })
 
   it("实际0条Bullet按原公式0分", () => {
@@ -227,13 +227,13 @@ describe("Listing 非CDQ原文证据", () => {
     const assessment = { basis: "inferred", terms: [{ term: "ink refill bottles" }, { term: "photo printer ink" }, { term: "high capacity" }] }
     expect(projectListingCriterionEvidence(1, 2, { assessment }, source)?.assessment.basis).toBe("provided")
     assessment.terms.pop()
-    expect(() => projectListingCriterionEvidence(1, 2, { assessment }, source)).toThrow("provided模式必须逐一核对")
+    expect(() => projectListingCriterionEvidence(1, 2, { assessment }, source)).toThrow("Check every provided B/C term")
   })
 
   it("同次校对不能删除未覆盖长尾词或更改候选分母", () => {
     const source = { ...createSource(), longtailTerms: ["ink refill bottles", "photo printer ink"] }
     const assessment = { basis: "inferred", terms: [{ term: "ink refill bottles", field: "bullets.1", quote: "Ink Refill Bottles" }] }
-    expect(() => projectListingCriterionEvidence(1, 2, { assessment }, source)).toThrow("冻结词表")
+    expect(() => projectListingCriterionEvidence(1, 2, { assessment }, source)).toThrow("frozen set")
   })
 
   it("提供词表必须逐词核对，同时保留原有跨品类过滤", () => {
@@ -244,7 +244,7 @@ describe("Listing 非CDQ原文证据", () => {
     ], excludedTerms: [{ term: "wireless earbuds", reason: "耳机与墨水补充瓶不是同类商品" }] }
     expect(projectListingCriterionEvidence(1, 2, { assessment }, source)?.score).toBe(3.5714)
     assessment.terms.pop()
-    expect(() => projectListingCriterionEvidence(1, 2, { assessment }, source)).toThrow("provided模式必须逐一核对")
+    expect(() => projectListingCriterionEvidence(1, 2, { assessment }, source)).toThrow("Check every provided B/C term")
   })
 
   it("提供词漏词时不冻结残缺分母，候选完整时不等模型field/quote通过才冻结", () => {
@@ -280,7 +280,7 @@ describe("Listing 非CDQ原文证据", () => {
       { checkId: "specifications", isPresent: true, quotes: ["excellent"] },
       { checkId: "overview_scenes", isPresent: false, quotes: [] as string[] },
     ] }
-    expect(() => projectListingCriterionEvidence(3, 2, { assessment }, { ...createSource(), description: "excellent" })).toThrow("真实字段:值")
+    expect(() => projectListingCriterionEvidence(3, 2, { assessment }, { ...createSource(), description: "excellent" })).toThrow("a field and value")
     const table = "<table><tr><td>CAPACITY</td><td>140mL</td></tr></table>"
     assessment.checks[0].quotes = [table]
     expect(projectListingCriterionEvidence(3, 2, { assessment }, { ...createSource(), description: table })?.score).toBe(2)
@@ -295,14 +295,14 @@ describe("Listing 非CDQ原文证据", () => {
     const result = projectListingCriterionEvidence(3, 2, { assessment }, { ...createSource(), description: quote })!
     expect(result.score).toBe(2)
     expect((result.assessment.checks as Array<{ quotes: string[] }>)[0].quotes).toEqual([quote])
-    expect(() => projectListingCriterionEvidence(3, 2, { assessment }, { ...createSource(), description: "CAPACITY: 140mL" })).toThrow("description不包含引用")
+    expect(() => projectListingCriterionEvidence(3, 2, { assessment }, { ...createSource(), description: "CAPACITY: 140mL" })).toThrow("description does not contain the quote")
   })
   it("一句话拆成重叠片段不能算两个具体场景", () => {
     const assessment = { checks: [
       { checkId: "specifications", isPresent: false, quotes: [] as string[] },
       { checkId: "overview_scenes", isPresent: true, quotes: ["My ink", "ink is"] },
     ] }
-    expect(() => projectListingCriterionEvidence(3, 2, { assessment }, { ...createSource(), description: "My ink is excellent." })).toThrow("重叠")
+    expect(() => projectListingCriterionEvidence(3, 2, { assessment }, { ...createSource(), description: "My ink is excellent." })).toThrow("non-overlapping scenes")
   })
   it.each([[0, 0], [1, 1], [2, 2.5], [3, 4], [4, 4]])("COSMO覆盖%s类按原每缺1类扣1.5得%s分", (count, score) => {
     const quotes = ["Ink refill bottles", "refilling printer ink", "office workers", "school projects"]
@@ -313,12 +313,12 @@ describe("Listing 非CDQ原文证据", () => {
 
   it("COSMO不能把同一Ink产品名重复用于四类关系制造满分", () => {
     const assessment = { relations: ["IS_A", "USED_TO", "USED_BY", "USED_FOR_EVE"].map(type => ({ type, field: "bullets.1", quote: "Ink" })) }
-    expect(() => projectListingCriterionEvidence(2, 2, { assessment }, createSource())).toThrow("复用了相同证据")
+    expect(() => projectListingCriterionEvidence(2, 2, { assessment }, createSource())).toThrow("reuses")
   })
   it("COSMO满分仍须四类逐项原文，不能只返回已覆盖结论", () => {
-    expect(() => projectListingCriterionEvidence(2, 2, { assessment: { relations: [] } }, createSource())).toThrow("完整列出四类")
+    expect(() => projectListingCriterionEvidence(2, 2, { assessment: { relations: [] } }, createSource())).toThrow("Include all four medium-priority relations")
     const assessment = { relations: ["IS_A", "USED_TO", "USED_BY", "USED_FOR_EVE"].map(type => ({ type, field: "description", quote: "适合家庭办公人员" })) }
-    expect(() => projectListingCriterionEvidence(2, 2, { assessment }, createSource())).toThrow("description不包含引用")
+    expect(() => projectListingCriterionEvidence(2, 2, { assessment }, createSource())).toThrow("description does not contain the quote")
   })
 
   it("描述不能借Bullet规格，两项缺失各扣1而不是负分或3分", () => {
@@ -334,7 +334,7 @@ describe("Listing 非CDQ原文证据", () => {
     ])
     assessment.checks[0] = { checkId: "specifications", isPresent: true, quotes: ["140mL"] }
     expect(projectListingCriterionEvidence(3, 2, { assessment }, createSource())?.score).toBe(1)
-    expect(() => projectListingCriterionEvidence(3, 2, { assessment }, { ...createSource(), description: "Independent product description." })).toThrow("description不包含引用")
+    expect(() => projectListingCriterionEvidence(3, 2, { assessment }, { ...createSource(), description: "Independent product description." })).toThrow("description does not contain the quote")
   })
 
   it.each([undefined, {}, { checks: [
@@ -371,7 +371,7 @@ describe("Listing 非CDQ原文证据", () => {
     expect(getListingEvidenceError(2, 2, result, createSource())).toBeNull()
     expect(assessment).toEqual(original)
     assessment.relations[1].quote = "Print one million pages without refills"
-    expect(() => projectListingCriterionEvidence(2, 2, { assessment }, createSource())).toThrow("不包含引用")
+    expect(() => projectListingCriterionEvidence(2, 2, { assessment }, createSource())).toThrow("does not contain the quote")
   })
 
   it("描述规格和两个独立场景均须实际描述原文", () => {
@@ -382,6 +382,6 @@ describe("Listing 非CDQ原文证据", () => {
     ] }
     expect(projectListingCriterionEvidence(3, 2, { assessment }, source)?.score).toBe(3)
     assessment.checks[1].quotes = ["homework at home", "homework at home"]
-    expect(() => projectListingCriterionEvidence(3, 2, { assessment }, source)).toThrow("至少两个不同场景")
+    expect(() => projectListingCriterionEvidence(3, 2, { assessment }, source)).toThrow("two distinct source scenes")
   })
 })
